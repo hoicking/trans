@@ -1,0 +1,20 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: trans-postgres
+    environment:
+      POSTGRES_USER: trans
+      POSTGRES_PASSWORD: trans_dev_password
+      POSTGRES_DB: trans
+    ports:
+      - "5433:5432"
+    volumes:
+      - trans_postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U trans -d trans"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  trans_postgres_data:

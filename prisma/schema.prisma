@@ -1,0 +1,221 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum Role {
+  ADMIN
+  TRANSLATOR
+  REVIEWER
+}
+
+enum KeyGenerationMode {
+  SEMANTIC
+  TEXT
+}
+
+model User {
+  id            String    @id @default(cuid())
+  name          String
+  email         String    @unique
+  emailVerified Boolean   @default(false)
+  image         String?
+  role          Role      @default(TRANSLATOR)
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  translatedValues TranslationValue[] @relation("TranslatedBy")
+  reviewedValues   TranslationValue[] @relation("ReviewedBy")
+}
+
+model Session {
+  id        String   @id @default(cuid())
+  expiresAt DateTime
+  token     String   @unique
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  ipAddress String?
+  userAgent String?
+  userId    String
+}
+
+model Account {
+  id                    String    @id @default(cuid())
+  accountId             String
+  providerId            String
+  userId                String
+  accessToken           String?
+  refreshToken          String?
+  idToken               String?
+  accessTokenExpiresAt  DateTime?
+  refreshTokenExpiresAt DateTime?
+  scope                 String?
+  password              String?
+  createdAt             DateTime  @default(now())
+  updatedAt             DateTime  @updatedAt
+}
+
+model Verification {
+  id         String   @id @default(cuid())
+  identifier String
+  value      String
+  expiresAt  DateTime
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+}
+
+model TranslationProject {
+  id          String   @id @default(cuid())
+  name        String
+  description String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  languages  ProjectLanguage[]
+  entries    TranslationEntry[]
+  aiConfig   ProjectAiConfig?
+  members    ProjectMember[]
+  importBatches ImportBatch[]
+  tags      Tag[]
+}
+
+model ProjectLanguage {
+  id        String   @id @default(cuid())
+  projectId String
+  code      String
+  name      String
+  isDefault Boolean  @default(false)
+  createdAt DateTime @default(now())
+
+  project TranslationProject @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@unique([projectId, code])
+}
+
+model ProjectMember {
+  id        String   @id @default(cuid())
+  projectId String
+  userId    String
+  role      Role
+  createdAt DateTime @default(now())
+
+  project TranslationProject @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@unique([projectId, userId])
+}
+
+model ProjectAiConfig {
+  id              String   @id @default(cuid())
+  projectId       String   @unique
+  providerName    String   @default("OpenAI compatible")
+  baseUrl         String
+  model           String
+  encryptedApiKey String
+  activeProvider  String   @default("deepseek")
+  chatgptApiKey   String   @default("")
+  chatgptModel    String   @default("gpt-4o-mini")
+  deepseekApiKey  String   @default("")
+  deepseekModel   String   @default("deepseek-v4-flash")
+  translationVibe String   @default("按照储能行业，能够缩写尽量缩写，表达要专业。")
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  project TranslationProject @relation(fields: [projectId], references: [id], onDelete: Cascade)
+}
+
+model TranslationEntry {
+  id                String            @id @default(cuid())
+  projectId         String
+  key               String
+  sourceLanguage    String            @default("en")
+  keyGenerationMode KeyGenerationMode @default(TEXT)
+  createdAt         DateTime          @default(now())
+  updatedAt         DateTime          @updatedAt
+
+  project TranslationProject @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  values  TranslationValue[]
+
+  @@unique([projectId, key])
+  @@index([projectId, key])
+}
+
+model TranslationValue {
+  id             String    @id @default(cuid())
+  entryId        String
+  languageCode   String
+  value          String    @default("")
+  isTranslated   Boolean   @default(false)
+  translatedAt   DateTime?
+  translatedById String?
+  isReviewed     Boolean   @default(false)
+  reviewedAt     DateTime?
+  reviewedById   String?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  entry        TranslationEntry @relation(fields: [entryId], references: [id], onDelete: Cascade)
+  translatedBy User?            @relation("TranslatedBy", fields: [translatedById], references: [id])
+  reviewedBy   User?            @relation("ReviewedBy", fields: [reviewedById], references: [id])
+  importBatchItems ImportBatchItem[]
+  tags         TranslationValueTag[]
+
+  @@unique([entryId, languageCode])
+  @@index([languageCode, isTranslated, isReviewed])
+}
+
+model ImportBatch {
+  id           String   @id @default(cuid())
+  projectId    String
+  name         String
+  requestedRows Int     @default(0)
+  importedRows Int      @default(0)
+  skippedRows  Int      @default(0)
+  createdAt    DateTime @default(now())
+
+  project TranslationProject @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  items   ImportBatchItem[]
+
+  @@index([projectId, createdAt])
+}
+
+model ImportBatchItem {
+  id                 String   @id @default(cuid())
+  batchId            String
+  translationValueId String
+  createdAt          DateTime @default(now())
+
+  batch ImportBatch      @relation(fields: [batchId], references: [id], onDelete: Cascade)
+  value TranslationValue @relation(fields: [translationValueId], references: [id], onDelete: Cascade)
+
+  @@unique([batchId, translationValueId])
+  @@index([translationValueId])
+}
+
+model Tag {
+  id        String   @id @default(cuid())
+  projectId String
+  name      String
+  createdAt DateTime @default(now())
+
+  project TranslationProject @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  values  TranslationValueTag[]
+
+  @@unique([projectId, name])
+}
+
+model TranslationValueTag {
+  id                 String   @id @default(cuid())
+  translationValueId String
+  tagId              String
+  createdAt          DateTime @default(now())
+
+  value TranslationValue @relation(fields: [translationValueId], references: [id], onDelete: Cascade)
+  tag   Tag              @relation(fields: [tagId], references: [id], onDelete: Cascade)
+
+  @@unique([translationValueId, tagId])
+  @@index([tagId])
+}
