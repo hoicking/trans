@@ -1752,7 +1752,13 @@ export function TranslationWorkspace() {
               />
             )}
 
-            {activeTab === "export" && <ExportTab onExportAllJson={exportAllJson} onExportExcel={() => void exportExcel()} />}
+            {activeTab === "export" && (
+              <ExportTab
+                localesZipUrl={`/api/projects/${activeProject.id}/export/locales.zip`}
+                onExportAllJson={exportAllJson}
+                onExportExcel={() => void exportExcel()}
+              />
+            )}
 
             {activeTab === "settings" && (
               <SettingsPanel

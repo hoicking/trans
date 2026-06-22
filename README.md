@@ -116,6 +116,17 @@ docker compose --env-file .env.production -f docker-compose.prod.yml down
 - Semantic or text-based underscore key generation
 - Project-level ChatGPT and DeepSeek AI provider configuration
 
+## Scripted Locale Download
+
+Each project exposes a ZIP download endpoint for scripts:
+
+```bash
+curl -L "http://<server-ip>:3000/api/projects/<project-id>/export/locales.zip" -o locales.zip
+```
+
+The ZIP contains one JSON file per language, such as `en.json`, `zh.json`,
+`it.json`. Keys are sorted in each JSON file.
+
 ## AI Provider Configuration
 
 In Settings > AI Configuration, choose the provider currently used for AI
