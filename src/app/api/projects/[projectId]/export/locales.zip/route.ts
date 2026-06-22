@@ -41,7 +41,7 @@ export async function GET(_request: Request, { params }: { params: Promise<{ pro
       2
     )
   }));
-  const zip = createZipBlob(files);
+  const zip = await createZipBlob(files);
   const filename = `${safeFilename(project.name)}_locales.zip`;
 
   return new Response(zip, {

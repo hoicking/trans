@@ -24,6 +24,7 @@ import { Progress } from "@/components/ui/progress";
 import { Select } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
 import { AddTranslationDialog } from "@/components/workspace/add-translation-dialog";
+import { BatchAddTranslationDialog } from "@/components/workspace/batch-add-translation-dialog";
 import { ConfirmDialog } from "@/components/workspace/confirm-dialog";
 import { ExportTab } from "@/components/workspace/export-tab";
 import { ImportTab } from "@/components/workspace/import-tab";
@@ -261,6 +262,8 @@ export function TranslationWorkspace() {
   const [sourceText, setSourceText] = React.useState("");
   const [sourceLanguage, setSourceLanguage] = React.useState("en");
   const [entryDialogOpen, setEntryDialogOpen] = React.useState(false);
+  const [batchDialogOpen, setBatchDialogOpen] = React.useState(false);
+  const [batchSourceText, setBatchSourceText] = React.useState("");
   const [keyMode, setKeyMode] = React.useState<KeyGenerationMode>("semantic");
   const [importRows, setImportRows] = React.useState<ImportRow[]>([]);
   const [conflicts, setConflicts] = React.useState<ImportConflict[]>([]);
@@ -1126,6 +1129,53 @@ export function TranslationWorkspace() {
     }
   }
 
+  async function batchAddEntries() {
+    const sourceValues = batchSourceText.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+    if (!sourceValues.length || !selectedTagName) return;
+
+    setSaveState("saving");
+    try {
+      const response = await fetch(`/api/projects/${activeProject.id}/entries/batch`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          sourceLanguage: "en",
+          sourceValues,
+          keyGenerationMode: keyMode,
+          tagName: selectedTagName
+        })
+      });
+      if (!response.ok) throw new Error(await response.text());
+      const payload = (await response.json()) as { project?: TranslationProject; entryIds?: string[] };
+      if (payload.project) {
+        setProjects((current) => current.map((project) => (project.id === payload.project?.id ? payload.project : project)));
+      }
+      setBatchSourceText("");
+      setBatchDialogOpen(false);
+      setSaveState("saved");
+      window.setTimeout(() => setSaveState("idle"), 1600);
+      setActiveTab("translations");
+
+      const createdEntries = payload.project?.entries.filter((entry) => payload.entryIds?.includes(entry.id)) ?? [];
+      if (payload.project && createdEntries.length) {
+        await translateProjectEntries(
+          payload.project,
+          createdEntries,
+          "en",
+          payload.project.languages.filter((language) => language.code !== "en").map((language) => language.code),
+          selectedTagName,
+          {
+            busyMessage: "正在批量 AI 补全...",
+            successMessage: `已批量新增 ${createdEntries.length} 条，结果进入待审核。`,
+            emptyTargetsMessage: "没有可补全语言。"
+          }
+        );
+      }
+    } catch {
+      setSaveState("error");
+    }
+  }
+
   async function addProject() {
     const name = newProjectName.trim();
     if (!name) return;
@@ -1369,7 +1419,7 @@ export function TranslationWorkspace() {
     }
   }
 
-  function exportAllJson() {
+  async function exportAllJson() {
     const sortedEntries = [...activeProject.entries].sort((left, right) => {
       if (left.key < right.key) return -1;
       if (left.key > right.key) return 1;
@@ -1384,30 +1434,33 @@ export function TranslationWorkspace() {
       )
     }));
     const filename = `${activeProject.name.replace(/[^a-z0-9]+/gi, "_").toLowerCase()}_locales.zip`;
-    downloadFile(filename, createZipBlob(files), "application/zip");
+    downloadFile(filename, await createZipBlob(files), "application/zip");
   }
 
   async function exportExcel() {
     const XLSX = await import("xlsx");
-    const rows = activeProject.entries.map((entry) => {
+    const exportLanguageCodes = ["en", "it", "pl", "ro", "zh"];
+    const sortedEntries = [...activeProject.entries].sort((left, right) => {
+      if (left.key < right.key) return -1;
+      if (left.key > right.key) return 1;
+      return 0;
+    });
+    const rows = sortedEntries.map((entry) => {
       const base: Record<string, string> = {
-        key: entry.key,
-        sourceLanguage: entry.sourceLanguage
+        key: entry.key
       };
-      for (const language of activeProject.languages) {
-        const translation = entry.translations[language.code] ?? emptyValue();
-        base[language.code] = translation.value;
-        base[`${language.code}_translated`] = translation.isTranslated ? "yes" : "no";
-        base[`${language.code}_translatedAt`] = translation.translatedAt ?? "";
-        base[`${language.code}_reviewed`] = translation.isReviewed ? "yes" : "no";
-        base[`${language.code}_reviewedAt`] = translation.reviewedAt ?? "";
+      for (const languageCode of exportLanguageCodes) {
+        base[languageCode] = entry.translations[languageCode]?.value ?? "";
       }
       return base;
     });
-    const sheet = XLSX.utils.json_to_sheet(rows);
+    const sheet = XLSX.utils.json_to_sheet(rows, { header: ["key", ...exportLanguageCodes] });
     const workbook = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(workbook, sheet, "translations");
-    XLSX.writeFile(workbook, `${activeProject.name.replace(/[^a-z0-9]+/gi, "_").toLowerCase()}_translations.xlsx`);
+    XLSX.writeFile(workbook, `${activeProject.name.replace(/[^a-z0-9]+/gi, "_").toLowerCase()}_translations.xlsx`, {
+      bookSST: true,
+      compression: true
+    });
   }
 
   const columns = React.useMemo<ColumnDef<TranslationEntry>[]>(() => {
@@ -1634,6 +1687,7 @@ export function TranslationWorkspace() {
                 onStatusFilterChange={setStatusFilter}
                 onTagFilterChange={setEntryTagFilter}
                 onOpenAddDialog={() => setEntryDialogOpen(true)}
+                onOpenBatchAddDialog={() => setBatchDialogOpen(true)}
               >
                 <section className="rounded-lg border bg-white p-4 shadow-soft">
                   {aiMessage && <p className="mb-4 text-sm text-zinc-500">{aiMessage}</p>}
@@ -1792,6 +1846,22 @@ export function TranslationWorkspace() {
         onSourceTextChange={setSourceText}
         onAdd={() => void addEntry()}
         onAddWithAi={() => void addEntry({ translate: true })}
+      />
+      <BatchAddTranslationDialog
+        open={batchDialogOpen}
+        tagOptions={tagOptions}
+        selectedTagName={selectedTagName}
+        keyMode={keyMode}
+        batchText={batchSourceText}
+        aiBusy={aiBusy}
+        onClose={() => setBatchDialogOpen(false)}
+        onSelectTag={setSelectedTagName}
+        onCreateTag={(tagName) => void createDateTag(tagName)}
+        onRenameTag={(tagName) => void renameDateTag(tagName)}
+        onDeleteTag={() => setDeleteTagRequested(true)}
+        onKeyModeChange={setKeyMode}
+        onBatchTextChange={setBatchSourceText}
+        onAddWithAi={() => void batchAddEntries()}
       />
       <ConfirmDialog
         open={Boolean(deleteEntryTarget)}

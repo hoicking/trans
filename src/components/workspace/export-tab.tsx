@@ -54,7 +54,7 @@ export function ExportTab({
       <div className="rounded-lg border bg-white p-5 shadow-soft">
         <FileSpreadsheet className="h-5 w-5" />
         <h2 className="mt-4 text-lg font-semibold">Excel 导出</h2>
-        <p className="mt-1 text-sm text-zinc-500">包含译文、翻译状态、审核状态、操作时间和操作人。</p>
+        <p className="mt-1 text-sm text-zinc-500">仅包含 key、en、it、pl、ro、zh。</p>
         <Button className="mt-5" onClick={onExportExcel}>
           导出 Excel
         </Button>

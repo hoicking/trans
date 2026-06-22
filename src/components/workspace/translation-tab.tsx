@@ -1,7 +1,7 @@
 "use client";
 
 import * as React from "react";
-import { Plus, Search } from "lucide-react";
+import { ListPlus, Plus, Search } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Select } from "@/components/ui/select";
@@ -22,7 +22,8 @@ export function TranslationTab({
   onActiveLanguageChange,
   onStatusFilterChange,
   onTagFilterChange,
-  onOpenAddDialog
+  onOpenAddDialog,
+  onOpenBatchAddDialog
 }: {
   search: string;
   activeLanguage: string;
@@ -37,6 +38,7 @@ export function TranslationTab({
   onStatusFilterChange: (value: StatusFilter) => void;
   onTagFilterChange: (value: string) => void;
   onOpenAddDialog: () => void;
+  onOpenBatchAddDialog: () => void;
 }) {
   const statusScopeLabel = activeLanguage === "all" ? "任意语言" : "当前语言";
 
@@ -96,10 +98,16 @@ export function TranslationTab({
               </option>
             ))}
           </Select>
-          <Button onClick={onOpenAddDialog}>
-            <Plus className="h-4 w-4" />
-            新增翻译
-          </Button>
+          <div className="flex flex-wrap gap-2">
+            <Button onClick={onOpenAddDialog}>
+              <Plus className="h-4 w-4" />
+              新增翻译
+            </Button>
+            <Button variant="outline" onClick={onOpenBatchAddDialog}>
+              <ListPlus className="h-4 w-4" />
+              批量新增
+            </Button>
+          </div>
         </div>
       </section>
       {children}

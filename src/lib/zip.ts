@@ -61,7 +61,18 @@ function toArrayBuffer(bytes: Uint8Array) {
   return buffer;
 }
 
-export function createZipBlob(files: ZipFile[]) {
+async function deflateRaw(bytes: Uint8Array) {
+  if (typeof CompressionStream === "undefined") return null;
+
+  try {
+    const stream = new Blob([toArrayBuffer(bytes)]).stream().pipeThrough(new CompressionStream("deflate-raw"));
+    return new Uint8Array(await new Response(stream).arrayBuffer());
+  } catch {
+    return null;
+  }
+}
+
+export async function createZipBlob(files: ZipFile[]) {
   const now = dosDateTime(new Date());
   const localParts: Uint8Array[] = [];
   const centralParts: Uint8Array[] = [];
@@ -70,34 +81,37 @@ export function createZipBlob(files: ZipFile[]) {
   for (const file of files) {
     const nameBytes = textEncoder.encode(file.name);
     const dataBytes = bytesOf(file.content);
+    const compressedBytes = await deflateRaw(dataBytes);
+    const fileBytes = compressedBytes ?? dataBytes;
+    const compressionMethod = compressedBytes ? 8 : 0;
     const checksum = crc32(dataBytes);
 
     const localHeader = concatBytes([
       uint32(0x04034b50),
       uint16(20),
       uint16(0x0800),
-      uint16(0),
+      uint16(compressionMethod),
       uint16(now.time),
       uint16(now.date),
       uint32(checksum),
-      uint32(dataBytes.length),
+      uint32(fileBytes.length),
       uint32(dataBytes.length),
       uint16(nameBytes.length),
       uint16(0),
       nameBytes
     ]);
-    localParts.push(localHeader, dataBytes);
+    localParts.push(localHeader, fileBytes);
 
     const centralHeader = concatBytes([
       uint32(0x02014b50),
       uint16(20),
       uint16(20),
       uint16(0x0800),
-      uint16(0),
+      uint16(compressionMethod),
       uint16(now.time),
       uint16(now.date),
       uint32(checksum),
-      uint32(dataBytes.length),
+      uint32(fileBytes.length),
       uint32(dataBytes.length),
       uint16(nameBytes.length),
       uint16(0),
@@ -109,7 +123,7 @@ export function createZipBlob(files: ZipFile[]) {
       nameBytes
     ]);
     centralParts.push(centralHeader);
-    offset += localHeader.length + dataBytes.length;
+    offset += localHeader.length + fileBytes.length;
   }
 
   const centralDirectory = concatBytes(centralParts);
