@@ -5,35 +5,31 @@ import { Button } from "@/components/ui/button";
 import { Select } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
 import type { KeyGenerationMode } from "@/lib/types";
-import { TagManager } from "./tag-manager";
+import { TagPicker } from "./tag-picker";
 
 export function BatchAddTranslationDialog({
   open,
   tagOptions,
-  selectedTagName,
+  tagColors,
+  selectedTagNames,
   keyMode,
   batchText,
   aiBusy,
   onClose,
-  onSelectTag,
-  onCreateTag,
-  onRenameTag,
-  onDeleteTag,
+  onTagNamesChange,
   onKeyModeChange,
   onBatchTextChange,
   onAddWithAi
 }: {
   open: boolean;
   tagOptions: string[];
-  selectedTagName: string;
+  tagColors: Record<string, string>;
+  selectedTagNames: string[];
   keyMode: KeyGenerationMode;
   batchText: string;
   aiBusy: boolean;
   onClose: () => void;
-  onSelectTag: (tagName: string) => void;
-  onCreateTag: (tagName: string) => void | Promise<void>;
-  onRenameTag: (nextTagName: string) => void | Promise<void>;
-  onDeleteTag: () => void | Promise<void>;
+  onTagNamesChange: (tagNames: string[]) => void;
   onKeyModeChange: (mode: KeyGenerationMode) => void;
   onBatchTextChange: (text: string) => void;
   onAddWithAi: () => void;
@@ -57,13 +53,13 @@ export function BatchAddTranslationDialog({
         </div>
 
         <div className="min-h-0 flex-1 space-y-4 overflow-y-auto p-5">
-          <TagManager
+          <TagPicker
             tagOptions={tagOptions}
-            selectedTagName={selectedTagName}
-            onSelectTag={onSelectTag}
-            onCreateTag={onCreateTag}
-            onRenameTag={onRenameTag}
-            onDeleteTag={onDeleteTag}
+            tagColors={tagColors}
+            selectedTagNames={selectedTagNames}
+            onChange={onTagNamesChange}
+            allowCreate={false}
+            required
             disabled={aiBusy}
           />
 
@@ -96,7 +92,7 @@ export function BatchAddTranslationDialog({
           <Button variant="outline" onClick={onClose} disabled={aiBusy}>
             取消
           </Button>
-          <Button onClick={onAddWithAi} disabled={!rowCount || !selectedTagName || aiBusy}>
+          <Button onClick={onAddWithAi} disabled={!rowCount || !selectedTagNames.length || aiBusy}>
             {aiBusy ? <WandSparkles className="h-4 w-4" /> : <ListPlus className="h-4 w-4" />}
             新增并补全
           </Button>

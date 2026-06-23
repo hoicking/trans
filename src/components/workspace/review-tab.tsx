@@ -6,10 +6,11 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Select } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
-import type { Language, TranslationEntry, TranslationValue, TranslationProject } from "@/lib/types";
+import type { Language, TranslationEntry, TranslationProject, TranslationValue } from "@/lib/types";
 import { cn, formatDateTime } from "@/lib/utils";
 import { EmptyState } from "./empty-state";
 import { PaginationBar } from "./pagination-bar";
+import { TagPicker } from "./tag-picker";
 
 export type ReviewLanguageItem = {
   language: Language;
@@ -35,9 +36,10 @@ export function ReviewTab({
   reviewDraft,
   reviewSearch,
   reviewLanguage,
-  reviewTagName,
+  reviewTagNames,
   reviewSort,
   tagOptions,
+  tagColors,
   reviewPage,
   reviewPageCount,
   reviewPageSize,
@@ -63,15 +65,16 @@ export function ReviewTab({
   reviewDraft: string;
   reviewSearch: string;
   reviewLanguage: string;
-  reviewTagName: string;
+  reviewTagNames: string[];
   reviewSort: ReviewSort;
   tagOptions: string[];
+  tagColors: Record<string, string>;
   reviewPage: number;
   reviewPageCount: number;
   reviewPageSize: number;
   onReviewSearchChange: (value: string) => void;
   onReviewLanguageChange: (value: string) => void;
-  onReviewTagChange: (value: string) => void;
+  onReviewTagChange: (value: string[]) => void;
   onReviewSortChange: (value: ReviewSort) => void;
   onSelectReview: (item: ReviewItem) => void;
   onSelectReviewLanguage: (item: ReviewLanguageItem) => void;
@@ -113,17 +116,15 @@ export function ReviewTab({
                 />
               </div>
             </label>
-            <label className="space-y-1 text-xs font-medium text-zinc-500">
-              Tag
-              <Select value={reviewTagName} onChange={(event) => onReviewTagChange(event.target.value)}>
-                <option value="all">全部 Tag</option>
-                {tagOptions.map((tag) => (
-                  <option key={tag} value={tag}>
-                    {tag}
-                  </option>
-                ))}
-              </Select>
-            </label>
+            <TagPicker
+              label="Tag"
+              tagOptions={tagOptions}
+              tagColors={tagColors}
+              selectedTagNames={reviewTagNames}
+              onChange={onReviewTagChange}
+              allowCreate={false}
+              emptyText="全部 Tag"
+            />
             <label className="space-y-1 text-xs font-medium text-zinc-500">
               语言
               <Select value={reviewLanguage} onChange={(event) => onReviewLanguageChange(event.target.value)}>
@@ -150,26 +151,27 @@ export function ReviewTab({
           {paginatedReviewItems.map((item) => {
             const id = item.entry.id;
             const source = item.entry.translations[item.entry.sourceLanguage]?.value || "";
+            const active = selectedReviewEntryId === id;
             return (
               <button
                 key={id}
                 onClick={() => onSelectReview(item)}
                 className={cn(
                   "w-full rounded-md border p-3 text-left transition-colors",
-                  selectedReviewEntryId === id ? "border-zinc-950 bg-zinc-950 text-white" : "bg-white hover:bg-zinc-50"
+                  active ? "border-zinc-950 bg-zinc-950 text-white" : "bg-white hover:bg-zinc-50"
                 )}
               >
                 <div className="flex items-center justify-between gap-3">
                   <span className="break-all font-mono text-sm">{item.entry.key}</span>
-                  <Badge variant={selectedReviewEntryId === id ? "muted" : "translated"}>{item.pendingLanguages.length} pending</Badge>
+                  <Badge variant={active ? "muted" : "translated"}>{item.pendingLanguages.length} pending</Badge>
                 </div>
-                <p className={cn("mt-2 line-clamp-2 text-xs", selectedReviewEntryId === id ? "text-zinc-300" : "text-zinc-500")}>
+                <p className={cn("mt-2 line-clamp-2 text-xs", active ? "text-zinc-300" : "text-zinc-500")}>
                   {source || "无源文"}
                 </p>
-                <div className={cn("mt-2 text-xs", selectedReviewEntryId === id ? "text-zinc-300" : "text-zinc-500")}>
+                <div className={cn("mt-2 text-xs", active ? "text-zinc-300" : "text-zinc-500")}>
                   {item.pendingLanguages.map((pending) => pending.language.code).join(" · ")}
                 </div>
-                <div className={cn("mt-2 text-xs", selectedReviewEntryId === id ? "text-zinc-400" : "text-zinc-400")}>
+                <div className={cn("mt-2 text-xs", active ? "text-zinc-400" : "text-zinc-400")}>
                   最后翻译 {formatDateTime(lastTranslatedAt(item))}
                 </div>
               </button>

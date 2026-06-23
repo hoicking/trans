@@ -26,17 +26,25 @@ import { Textarea } from "@/components/ui/textarea";
 import { AddTranslationDialog } from "@/components/workspace/add-translation-dialog";
 import { BatchAddTranslationDialog } from "@/components/workspace/batch-add-translation-dialog";
 import { ConfirmDialog } from "@/components/workspace/confirm-dialog";
+import {
+  DuplicateEnglishDialog,
+  type DuplicateEnglishCandidate,
+  type DuplicateEnglishDecision
+} from "@/components/workspace/duplicate-english-dialog";
+import { EntryTagDialog } from "@/components/workspace/entry-tag-dialog";
 import { ExportTab } from "@/components/workspace/export-tab";
 import { ImportTab } from "@/components/workspace/import-tab";
 import { Metric } from "@/components/workspace/metric";
 import { PaginationBar } from "@/components/workspace/pagination-bar";
 import { ReviewTab, type ReviewItem, type ReviewSort } from "@/components/workspace/review-tab";
 import { SettingsPanel } from "@/components/workspace/settings-panel";
-import { formatDateTag, latestTagName, tagToDateInputValue, todayDateInputValue } from "@/components/workspace/tag-utils";
+import { TagBadge } from "@/components/workspace/tag-badge";
+import { TagTab } from "@/components/workspace/tag-tab";
 import { TranslationTab, type StatusFilter } from "@/components/workspace/translation-tab";
 import { useProjects } from "@/components/workspace/use-projects";
 import { defaultTranslationVibe } from "@/lib/ai-defaults";
 import { defaultLanguages } from "@/lib/seed";
+import { defaultTagColor, normalizeTagColor, normalizeTagName, uniqueTagNames } from "@/lib/tags";
 import type {
   ConflictAction,
   ImportConflict,
@@ -50,7 +58,7 @@ import type {
 import { cn, formatDateTime, makeId, semanticKey, slugKey, uniqueKey } from "@/lib/utils";
 import { createZipBlob } from "@/lib/zip";
 
-type Tab = "dashboard" | "translations" | "review" | "import" | "export" | "settings";
+type Tab = "dashboard" | "translations" | "review" | "import" | "export" | "tags" | "settings";
 
 const currentUser = "Admin";
 const importChunkSize = 200;
@@ -63,6 +71,35 @@ const reservedImportColumns = new Set([
   "translatedat",
   "reviewedat"
 ]);
+
+type SingleEntrySubmission = {
+  text: string;
+  key?: string;
+  sourceLanguage: string;
+  keyGenerationMode: KeyGenerationMode;
+  tagNames: string[];
+  translate: boolean;
+  duplicateItem?: DuplicateEnglishCandidate;
+};
+
+type BatchEntrySubmission = {
+  sourceValues: string[];
+  keyGenerationMode: KeyGenerationMode;
+  tagNames: string[];
+  duplicateItems?: DuplicateEnglishCandidate[];
+};
+
+type PendingDuplicateEnglishAction =
+  | {
+      kind: "single";
+      request: Omit<SingleEntrySubmission, "duplicateItem">;
+      items: DuplicateEnglishCandidate[];
+    }
+  | {
+      kind: "batch";
+      request: Omit<BatchEntrySubmission, "duplicateItems">;
+      items: DuplicateEnglishCandidate[];
+    };
 
 function aiErrorMessage(raw: string) {
   try {
@@ -251,7 +288,7 @@ export function TranslationWorkspace() {
   const [appliedSearch, setAppliedSearch] = React.useState("");
   const [searchResultEntryIds, setSearchResultEntryIds] = React.useState<string[] | null>(null);
   const [statusFilter, setStatusFilter] = React.useState<StatusFilter>("all");
-  const [entryTagFilter, setEntryTagFilter] = React.useState("all");
+  const [entryTagFilters, setEntryTagFilters] = React.useState<string[]>([]);
   const [activeLanguage, setActiveLanguage] = React.useState("all");
   const [entryPage, setEntryPage] = React.useState(1);
   const [reviewPage, setReviewPage] = React.useState(1);
@@ -267,60 +304,39 @@ export function TranslationWorkspace() {
   const [keyMode, setKeyMode] = React.useState<KeyGenerationMode>("semantic");
   const [importRows, setImportRows] = React.useState<ImportRow[]>([]);
   const [conflicts, setConflicts] = React.useState<ImportConflict[]>([]);
-  const [selectedTagName, setSelectedTagName] = React.useState("");
-  const [tagDate, setTagDate] = React.useState(todayDateInputValue());
+  const [selectedTagNames, setSelectedTagNames] = React.useState<string[]>([]);
   const [selectedReviewEntryId, setSelectedReviewEntryId] = React.useState<string | null>(null);
   const [activeReviewLanguage, setActiveReviewLanguage] = React.useState<string | null>(null);
   const [reviewDraft, setReviewDraft] = React.useState("");
   const [reviewSearch, setReviewSearch] = React.useState("");
   const deferredReviewSearch = React.useDeferredValue(reviewSearch);
   const [reviewLanguage, setReviewLanguage] = React.useState("all");
-  const [reviewTagName, setReviewTagName] = React.useState("");
+  const [reviewTagNames, setReviewTagNames] = React.useState<string[]>([]);
   const [reviewSort, setReviewSort] = React.useState<ReviewSort>("latest");
   const [deleteEntryTarget, setDeleteEntryTarget] = React.useState<TranslationEntry | null>(null);
-  const [deleteTagRequested, setDeleteTagRequested] = React.useState(false);
+  const [deleteTagTarget, setDeleteTagTarget] = React.useState<string | null>(null);
+  const [entryTagTarget, setEntryTagTarget] = React.useState<TranslationEntry | null>(null);
   const [deleteProjectRequested, setDeleteProjectRequested] = React.useState(false);
   const [aiTargetLanguages, setAiTargetLanguages] = React.useState("zh,ro,pl,it");
   const [aiMessage, setAiMessage] = React.useState("");
   const [aiBusy, setAiBusy] = React.useState(false);
-  const reviewDefaultedProjectId = React.useRef("");
+  const [duplicateEnglishAction, setDuplicateEnglishAction] = React.useState<PendingDuplicateEnglishAction | null>(null);
 
   const emptyProject = React.useMemo(() => createProject(""), []);
   const loadedProject = projects.find((project) => project.id === activeProjectId) ?? projects[0] ?? null;
   const activeProject = loadedProject ?? emptyProject;
   const hasActiveProject = Boolean(loadedProject);
   const tagOptions = React.useMemo(() => {
-    return Array.from(new Set([...(activeProject?.tags ?? []), selectedTagName].filter(Boolean))).sort();
-  }, [activeProject?.tags, selectedTagName]);
+    return uniqueTagNames([...(activeProject?.tags ?? []), ...selectedTagNames, ...entryTagFilters, ...reviewTagNames]).sort();
+  }, [activeProject?.tags, entryTagFilters, reviewTagNames, selectedTagNames]);
+  const tagColors = React.useMemo(() => activeProject.tagColors ?? {}, [activeProject.tagColors]);
 
   React.useEffect(() => {
-    if (!activeProject) return;
-    const projectTags = activeProject.tags ?? [];
-    if (!projectTags.length) {
-      if (selectedTagName) setSelectedTagName("");
-      return;
-    }
-    const nextTag = latestTagName(projectTags);
-    if (!selectedTagName || !projectTags.includes(selectedTagName)) {
-      setSelectedTagName(nextTag);
-      setTagDate(tagToDateInputValue(nextTag));
-    }
-  }, [activeProject, selectedTagName]);
-
-  React.useEffect(() => {
-    if (reviewDefaultedProjectId.current === activeProject.id) return;
-    reviewDefaultedProjectId.current = activeProject.id;
-    const projectTags = activeProject.tags ?? [];
-    setReviewTagName(projectTags.length ? latestTagName(projectTags) : "all");
+    const projectTagSet = new Set(activeProject.tags ?? []);
+    setSelectedTagNames((current) => current.filter((tag) => projectTagSet.has(tag)));
+    setEntryTagFilters((current) => current.filter((tag) => projectTagSet.has(tag)));
+    setReviewTagNames((current) => current.filter((tag) => projectTagSet.has(tag)));
   }, [activeProject.id, activeProject.tags]);
-
-  React.useEffect(() => {
-    if (reviewTagName === "all") return;
-    const projectTags = activeProject.tags ?? [];
-    if (!reviewTagName || !projectTags.includes(reviewTagName)) {
-      setReviewTagName(projectTags.length ? latestTagName(projectTags) : "all");
-    }
-  }, [activeProject.tags, reviewTagName]);
 
   const stats = projectStats(activeProject);
 
@@ -392,59 +408,74 @@ export function TranslationWorkspace() {
     [activeProject.id]
   );
 
-  const createDateTag = React.useCallback(async (requestedTagName?: string) => {
-    const tagName = requestedTagName ?? formatDateTag(tagDate);
+  const createTag = React.useCallback(async (requestedTagName: string, color = defaultTagColor) => {
+    const tagName = normalizeTagName(requestedTagName);
     if (!tagName) return;
+    const tagColor = normalizeTagColor(color);
     setSaveState("saving");
     try {
       const response = await fetch(`/api/projects/${activeProject.id}/tags`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name: tagName })
+        body: JSON.stringify({ name: tagName, color: tagColor })
       });
       if (!response.ok) throw new Error(await response.text());
-      const payload = (await response.json()) as { tags?: string[] };
+      const payload = (await response.json()) as { tags?: string[]; tagColors?: Record<string, string> };
       setProjects((current) =>
         current.map((project) =>
           project.id === activeProject.id
-            ? { ...project, tags: payload.tags ?? Array.from(new Set([...(project.tags ?? []), tagName])).sort() }
+            ? {
+                ...project,
+                tags: payload.tags ?? uniqueTagNames([...(project.tags ?? []), tagName]).sort(),
+                tagColors: payload.tagColors ?? { ...(project.tagColors ?? {}), [tagName]: tagColor }
+              }
             : project
         )
       );
-      setSelectedTagName(tagName);
       setSaveState("saved");
       window.setTimeout(() => setSaveState("idle"), 1600);
     } catch {
       setSaveState("error");
     }
-  }, [activeProject.id, setProjects, tagDate]);
+  }, [activeProject.id, setProjects]);
 
-  const renameDateTag = React.useCallback(async (nextTagName: string) => {
-    if (!selectedTagName || !nextTagName || selectedTagName === nextTagName) return;
+  const renameTag = React.useCallback(async (oldName: string, nextTagName: string, color?: string) => {
+    const name = normalizeTagName(nextTagName);
+    if (!oldName || !name) return;
+    const tagColor = normalizeTagColor(color ?? tagColors[oldName]);
     setSaveState("saving");
     try {
       const response = await fetch(`/api/projects/${activeProject.id}/tags`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ oldName: selectedTagName, name: nextTagName })
+        body: JSON.stringify({ oldName, name, color: tagColor })
       });
       if (!response.ok) throw new Error(await response.text());
-      const payload = (await response.json()) as { tags?: string[] };
+      const payload = (await response.json()) as { tags?: string[]; tagColors?: Record<string, string> };
       const tags = payload.tags ?? [];
+      const replaceTags = (tagNames?: string[]) => tagNames?.map((tag) => (tag === oldName ? name : tag));
+      const replaceTagColors = (current?: Record<string, string>) => {
+        const next = { ...(current ?? {}) };
+        delete next[oldName];
+        next[name] = tagColor;
+        return next;
+      };
       setProjects((current) =>
         current.map((project) =>
           project.id === activeProject.id
             ? {
                 ...project,
                 tags,
+                tagColors: payload.tagColors ?? replaceTagColors(project.tagColors),
                 entries: project.entries.map((entry) => ({
                   ...entry,
+                  tagNames: replaceTags(entry.tagNames),
                   translations: Object.fromEntries(
                     Object.entries(entry.translations).map(([languageCode, translation]) => [
                       languageCode,
                       {
                         ...translation,
-                        tagNames: translation.tagNames?.map((tag) => (tag === selectedTagName ? nextTagName : tag))
+                        tagNames: replaceTags(translation.tagNames)
                       }
                     ])
                   )
@@ -453,40 +484,50 @@ export function TranslationWorkspace() {
             : project
         )
       );
-      setSelectedTagName(nextTagName);
+      setSelectedTagNames((current) => uniqueTagNames(replaceTags(current) ?? []));
+      setEntryTagFilters((current) => uniqueTagNames(replaceTags(current) ?? []));
+      setReviewTagNames((current) => uniqueTagNames(replaceTags(current) ?? []));
       setSaveState("saved");
       window.setTimeout(() => setSaveState("idle"), 1600);
     } catch {
       setSaveState("error");
     }
-  }, [activeProject.id, selectedTagName, setProjects]);
+  }, [activeProject.id, setProjects, tagColors]);
 
-  const deleteDateTag = React.useCallback(async () => {
-    if (!selectedTagName) return;
+  const deleteTag = React.useCallback(async (tagName: string) => {
+    if (!tagName) return;
     setSaveState("saving");
     try {
       const response = await fetch(`/api/projects/${activeProject.id}/tags`, {
         method: "DELETE",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name: selectedTagName })
+        body: JSON.stringify({ name: tagName })
       });
       if (!response.ok) throw new Error(await response.text());
-      const payload = (await response.json()) as { tags?: string[] };
+      const payload = (await response.json()) as { tags?: string[]; tagColors?: Record<string, string> };
       const tags = payload.tags ?? [];
+      const removeTag = (tagNames?: string[]) => tagNames?.filter((tag) => tag !== tagName);
+      const removeTagColor = (current?: Record<string, string>) => {
+        const next = { ...(current ?? {}) };
+        delete next[tagName];
+        return next;
+      };
       setProjects((current) =>
         current.map((project) =>
           project.id === activeProject.id
             ? {
                 ...project,
                 tags,
+                tagColors: payload.tagColors ?? removeTagColor(project.tagColors),
                 entries: project.entries.map((entry) => ({
                   ...entry,
+                  tagNames: removeTag(entry.tagNames),
                   translations: Object.fromEntries(
                     Object.entries(entry.translations).map(([languageCode, translation]) => [
                       languageCode,
                       {
                         ...translation,
-                        tagNames: translation.tagNames?.filter((tag) => tag !== selectedTagName)
+                        tagNames: removeTag(translation.tagNames)
                       }
                     ])
                   )
@@ -495,19 +536,40 @@ export function TranslationWorkspace() {
             : project
         )
       );
-      const nextTag = tags.length ? latestTagName(tags) : "";
-      setSelectedTagName(nextTag);
-      setTagDate(nextTag ? tagToDateInputValue(nextTag) : todayDateInputValue());
-      setEntryTagFilter((current) => (current === selectedTagName ? "all" : current));
-      setReviewTagName((current) => (current === selectedTagName ? "all" : current));
+      setSelectedTagNames((current) => current.filter((tag) => tag !== tagName));
+      setEntryTagFilters((current) => current.filter((tag) => tag !== tagName));
+      setReviewTagNames((current) => current.filter((tag) => tag !== tagName));
       setSaveState("saved");
       window.setTimeout(() => setSaveState("idle"), 1600);
     } catch {
       setSaveState("error");
     } finally {
-      setDeleteTagRequested(false);
+      setDeleteTagTarget(null);
     }
-  }, [activeProject.id, selectedTagName, setProjects]);
+  }, [activeProject.id, setProjects]);
+
+  const saveEntryTags = React.useCallback(async (entry: TranslationEntry, tagNames: string[]) => {
+    const cleanTagNames = uniqueTagNames(tagNames);
+    if (!cleanTagNames.length) return;
+    setSaveState("saving");
+    try {
+      const response = await fetch(`/api/projects/${activeProject.id}/entries/${entry.id}/tags`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ tagNames: cleanTagNames })
+      });
+      if (!response.ok) throw new Error(await response.text());
+      const payload = (await response.json()) as { project?: TranslationProject };
+      if (payload.project) {
+        setProjects((current) => current.map((project) => (project.id === payload.project?.id ? payload.project : project)));
+      }
+      setEntryTagTarget(null);
+      setSaveState("saved");
+      window.setTimeout(() => setSaveState("idle"), 1600);
+    } catch {
+      setSaveState("error");
+    }
+  }, [activeProject.id, setProjects]);
 
   const deleteEntry = React.useCallback(async (entryId: string) => {
     setSaveState("saving");
@@ -552,9 +614,9 @@ export function TranslationWorkspace() {
       setProjects(nextProjects);
       setActiveProjectId(nextProjects[0]?.id ?? null);
       setActiveTab("dashboard");
-      setSelectedTagName("");
-      setEntryTagFilter("all");
-      setReviewTagName("all");
+      setSelectedTagNames([]);
+      setEntryTagFilters([]);
+      setReviewTagNames([]);
       setSaveState("saved");
       window.setTimeout(() => setSaveState("idle"), 1600);
     } catch {
@@ -597,6 +659,57 @@ export function TranslationWorkspace() {
     },
     [getTargetLanguages]
   );
+
+  const findExistingEnglishEntry = React.useCallback(
+    (englishText: string) => {
+      const text = englishText.trim();
+      if (!text) return null;
+      return activeProject.entries.find((entry) => entry.translations.en?.value === text) ?? null;
+    },
+    [activeProject.entries]
+  );
+
+  const buildDuplicateEnglishCandidates = React.useCallback(
+    (sourceValues: string[]) => {
+      return sourceValues.flatMap((sourceValue, index): DuplicateEnglishCandidate[] => {
+        const existingEntry = findExistingEnglishEntry(sourceValue);
+        if (!existingEntry) return [];
+        return [
+          {
+            id: `${index}-${existingEntry.id}`,
+            text: sourceValue,
+            existingEntryId: existingEntry.id,
+            existingKey: existingEntry.key,
+            decision: "reuse",
+            sourceValueIndex: index
+          }
+        ];
+      });
+    },
+    [findExistingEnglishEntry]
+  );
+
+  const setDuplicateEnglishDecision = React.useCallback((id: string, decision: DuplicateEnglishDecision) => {
+    setDuplicateEnglishAction((current) =>
+      current
+        ? {
+            ...current,
+            items: current.items.map((item) => (item.id === id ? { ...item, decision } : item))
+          }
+        : current
+    );
+  }, []);
+
+  const setAllDuplicateEnglishDecisions = React.useCallback((decision: DuplicateEnglishDecision) => {
+    setDuplicateEnglishAction((current) =>
+      current
+        ? {
+            ...current,
+            items: current.items.map((item) => ({ ...item, decision }))
+          }
+        : current
+    );
+  }, []);
 
   const buildImportConflicts = React.useCallback(
     (rows: ImportRow[]) => {
@@ -668,11 +781,13 @@ export function TranslationWorkspace() {
       project: TranslationProject,
       generated: Record<string, Record<string, string>>,
       targetLanguages: string[],
-      tagName?: string,
+      tagNames?: string[],
       options?: { overwrite?: boolean }
     ) => {
       const now = new Date().toISOString();
       const overwrite = Boolean(options?.overwrite);
+      const cleanTagNames = uniqueTagNames(tagNames ?? []);
+      const mergeTagNames = (current?: string[]) => uniqueTagNames([...(current ?? []), ...cleanTagNames]);
       const valuesToPersist: Array<{ entryId: string; languageCode: string; value: string; refreshTranslatedMeta: boolean }> = [];
       const nextProject = {
         ...project,
@@ -698,13 +813,26 @@ export function TranslationWorkspace() {
               reviewedBy: null
             };
           }
+          const nextTranslations = {
+            ...entry.translations,
+            ...updates
+          };
+          const translationsWithTags = cleanTagNames.length
+            ? Object.fromEntries(
+                Object.entries(nextTranslations).map(([languageCode, translation]) => [
+                  languageCode,
+                  {
+                    ...translation,
+                    tagNames: mergeTagNames(translation.tagNames)
+                  }
+                ])
+              )
+            : nextTranslations;
 
           return {
             ...entry,
-            translations: {
-              ...entry.translations,
-              ...updates
-            },
+            tagNames: cleanTagNames.length ? mergeTagNames(entry.tagNames) : entry.tagNames,
+            translations: translationsWithTags,
             updatedAt: now
           };
         }),
@@ -727,7 +855,7 @@ export function TranslationWorkspace() {
                 isReviewed: false,
                 actorName: "AI",
                 refreshTranslatedMeta: item.refreshTranslatedMeta,
-                tagName
+                tagNames: cleanTagNames
               })
             });
             if (!response.ok) throw new Error(await response.text());
@@ -750,7 +878,7 @@ export function TranslationWorkspace() {
       entries: TranslationEntry[],
       sourceLanguageCode: string,
       targetLanguages: string[],
-      tagName?: string,
+      tagNames?: string[],
       options?: {
         overwrite?: boolean;
         busyMessage?: string;
@@ -785,7 +913,7 @@ export function TranslationWorkspace() {
           setAiMessage(`AI 服务调用失败：${result.failure}。未写入译文。`);
           return project;
         }
-        const nextProject = await mergeProjectTranslations(project, result.translations, targetLanguages, tagName, {
+        const nextProject = await mergeProjectTranslations(project, result.translations, targetLanguages, tagNames, {
           overwrite: options?.overwrite
         });
         setAiMessage(options?.successMessage ?? "AI 已补全缺漏语言，结果进入待审核。");
@@ -826,13 +954,12 @@ export function TranslationWorkspace() {
         (statusFilter === "reviewed" && statusValues.some((translation) => Boolean(translation?.isReviewed))) ||
         (statusFilter === "unreviewed" &&
           statusValues.some((translation) => Boolean(translation?.isTranslated) && !translation?.isReviewed));
-      const matchesTag =
-        entryTagFilter === "all" ||
-        Object.values(entry.translations).some((value) => value.tagNames?.includes(entryTagFilter));
+      const entryTags = entry.tagNames ?? [];
+      const matchesTag = !entryTagFilters.length || entryTagFilters.some((tag) => entryTags.includes(tag));
 
       return matchesSearch && matchesStatus && matchesTag;
     });
-  }, [activeLanguage, activeProject.entries, activeProject.languages, appliedSearch, entryTagFilter, searchResultEntryIds, statusFilter]);
+  }, [activeLanguage, activeProject.entries, activeProject.languages, appliedSearch, entryTagFilters, searchResultEntryIds, statusFilter]);
 
   const entryPageSize = 10;
   const entryPageCount = Math.max(1, Math.ceil(filteredEntries.length / entryPageSize));
@@ -867,6 +994,8 @@ export function TranslationWorkspace() {
 
     const items = activeProject.entries
       .map((entry) => {
+        const entryTags = entry.tagNames ?? [];
+        const matchesTag = !reviewTagNames.length || reviewTagNames.some((tag) => entryTags.includes(tag));
         const pendingLanguages = activeProject.languages
           .map((language) => ({
             language,
@@ -874,7 +1003,6 @@ export function TranslationWorkspace() {
           }))
           .filter((item) => {
             const matchesLanguage = reviewLanguage === "all" || item.language.code === reviewLanguage;
-            const matchesTag = reviewTagName === "all" || item.translation?.tagNames?.includes(reviewTagName);
             return (
               matchesLanguage &&
               matchesTag &&
@@ -909,7 +1037,7 @@ export function TranslationWorkspace() {
       }
       return itemTimestamp(right, "latest") - itemTimestamp(left, "latest");
     });
-  }, [activeProject.entries, activeProject.languages, deferredReviewSearch, reviewLanguage, reviewSort, reviewTagName]);
+  }, [activeProject.entries, activeProject.languages, deferredReviewSearch, reviewLanguage, reviewSort, reviewTagNames]);
 
   const reviewPageSize = 10;
   const reviewPageCount = Math.max(1, Math.ceil(reviewItems.length / reviewPageSize));
@@ -937,7 +1065,7 @@ export function TranslationWorkspace() {
 
   React.useEffect(() => {
     setEntryPage(1);
-  }, [activeLanguage, appliedSearch, entryTagFilter, statusFilter, activeProject.id]);
+  }, [activeLanguage, appliedSearch, entryTagFilters, statusFilter, activeProject.id]);
 
   React.useEffect(() => {
     setSearch("");
@@ -955,7 +1083,7 @@ export function TranslationWorkspace() {
 
   React.useEffect(() => {
     setReviewPage(1);
-  }, [deferredReviewSearch, reviewLanguage, reviewSort, reviewTagName, activeProject.id]);
+  }, [deferredReviewSearch, reviewLanguage, reviewSort, reviewTagNames, activeProject.id]);
 
   React.useEffect(() => {
     setImportPage(1);
@@ -1084,21 +1212,47 @@ export function TranslationWorkspace() {
     void persistTranslation(entryId, languageCode, reviewDraft, false, false);
   }
 
-  async function addEntry(options?: { translate?: boolean }) {
-    const text = sourceText.trim();
-    if (!text) return;
-    const shouldTranslate = Boolean(options?.translate);
+  function entriesByIds(project: TranslationProject, entryIds: Iterable<string>) {
+    const entryIdSet = new Set(entryIds);
+    return project.entries.filter((entry) => entryIdSet.has(entry.id));
+  }
+
+  async function submitSingleEntry(request: SingleEntrySubmission) {
+    if (request.duplicateItem?.decision === "reuse") {
+      const existingEntry = activeProject.entries.find((entry) => entry.id === request.duplicateItem?.existingEntryId);
+      if (!existingEntry) {
+        setSaveState("error");
+        return;
+      }
+
+      setNewEntryKey("");
+      setSourceText("");
+      setEntryDialogOpen(false);
+      setActiveTab("translations");
+      setAiMessage(`已沿用旧 key "${existingEntry.key}"。`);
+      if (request.translate) {
+        await translateProjectEntries(
+          activeProject,
+          [existingEntry],
+          "en",
+          getMissingTargetLanguages(activeProject, existingEntry, "en"),
+          request.tagNames
+        );
+      }
+      return;
+    }
+
     setSaveState("saving");
     try {
       const response = await fetch(`/api/projects/${activeProject.id}/entries`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          key: newEntryKey.trim() || undefined,
-          sourceLanguage,
-          sourceValue: text,
-          keyGenerationMode: keyMode,
-          tagName: selectedTagName
+          key: request.key,
+          sourceLanguage: request.sourceLanguage,
+          sourceValue: request.text,
+          keyGenerationMode: request.keyGenerationMode,
+          tagNames: request.tagNames
         })
       });
       if (!response.ok) throw new Error(await response.text());
@@ -1112,15 +1266,15 @@ export function TranslationWorkspace() {
       setSaveState("saved");
       window.setTimeout(() => setSaveState("idle"), 1600);
       setActiveTab("translations");
-      if (shouldTranslate && payload.project && payload.entryId) {
+      if (request.translate && payload.project && payload.entryId) {
         const entry = payload.project.entries.find((item) => item.id === payload.entryId);
         if (entry) {
           await translateProjectEntries(
             payload.project,
             [entry],
-            sourceLanguage,
-            getMissingTargetLanguages(payload.project, entry, sourceLanguage),
-            selectedTagName
+            request.sourceLanguage,
+            getMissingTargetLanguages(payload.project, entry, request.sourceLanguage),
+            request.tagNames
           );
         }
       }
@@ -1129,44 +1283,87 @@ export function TranslationWorkspace() {
     }
   }
 
-  async function batchAddEntries() {
-    const sourceValues = batchSourceText.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
-    if (!sourceValues.length || !selectedTagName) return;
+  async function addEntry(options?: { translate?: boolean }) {
+    const text = sourceText.trim();
+    if (!text || !selectedTagNames.length) return;
+    const request = {
+      text,
+      key: newEntryKey.trim() || undefined,
+      sourceLanguage,
+      keyGenerationMode: keyMode,
+      tagNames: [...selectedTagNames],
+      translate: Boolean(options?.translate)
+    };
+    const duplicateItems = sourceLanguage.toLowerCase() === "en" ? buildDuplicateEnglishCandidates([text]) : [];
+    if (duplicateItems.length) {
+      setDuplicateEnglishAction({ kind: "single", request, items: duplicateItems });
+      return;
+    }
+
+    await submitSingleEntry(request);
+  }
+
+  async function submitBatchEntries(request: BatchEntrySubmission) {
+    const duplicateItems = request.duplicateItems ?? [];
+    const reuseSourceIndexes = new Set(
+      duplicateItems
+        .filter((item) => item.decision === "reuse" && typeof item.sourceValueIndex === "number")
+        .map((item) => item.sourceValueIndex as number)
+    );
+    const reusedEntryIds = Array.from(new Set(duplicateItems.filter((item) => item.decision === "reuse").map((item) => item.existingEntryId)));
+    const sourceValuesToCreate = request.sourceValues.filter((_, index) => !reuseSourceIndexes.has(index));
+    let projectForAi = activeProject;
+    let createdEntryIds: string[] = [];
 
     setSaveState("saving");
     try {
-      const response = await fetch(`/api/projects/${activeProject.id}/entries/batch`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          sourceLanguage: "en",
-          sourceValues,
-          keyGenerationMode: keyMode,
-          tagName: selectedTagName
-        })
-      });
-      if (!response.ok) throw new Error(await response.text());
-      const payload = (await response.json()) as { project?: TranslationProject; entryIds?: string[] };
-      if (payload.project) {
-        setProjects((current) => current.map((project) => (project.id === payload.project?.id ? payload.project : project)));
+      if (sourceValuesToCreate.length) {
+        const response = await fetch(`/api/projects/${activeProject.id}/entries/batch`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            sourceLanguage: "en",
+            sourceValues: sourceValuesToCreate,
+            keyGenerationMode: request.keyGenerationMode,
+            tagNames: request.tagNames
+          })
+        });
+        if (!response.ok) throw new Error(await response.text());
+        const payload = (await response.json()) as { project?: TranslationProject; entryIds?: string[] };
+        if (payload.project) {
+          projectForAi = payload.project;
+          setProjects((current) => current.map((project) => (project.id === payload.project?.id ? payload.project : project)));
+        }
+        createdEntryIds = payload.entryIds ?? [];
       }
+
       setBatchSourceText("");
       setBatchDialogOpen(false);
       setSaveState("saved");
       window.setTimeout(() => setSaveState("idle"), 1600);
       setActiveTab("translations");
 
-      const createdEntries = payload.project?.entries.filter((entry) => payload.entryIds?.includes(entry.id)) ?? [];
-      if (payload.project && createdEntries.length) {
+      const createdEntries = entriesByIds(projectForAi, createdEntryIds);
+      const reusedEntries = entriesByIds(projectForAi, reusedEntryIds);
+      const entriesForAi = Array.from(new Map([...createdEntries, ...reusedEntries].map((entry) => [entry.id, entry])).values());
+      if (entriesForAi.length) {
+        const createdCount = createdEntries.length;
+        const reusedCount = reusedEntries.length;
+        const successMessage =
+          createdCount && reusedCount
+            ? `已新增 ${createdCount} 条，并沿用 ${reusedCount} 个旧 key，结果进入待审核。`
+            : createdCount
+              ? `已批量新增 ${createdCount} 条，结果进入待审核。`
+              : `已沿用 ${reusedCount} 个旧 key，结果进入待审核。`;
         await translateProjectEntries(
-          payload.project,
-          createdEntries,
+          projectForAi,
+          entriesForAi,
           "en",
-          payload.project.languages.filter((language) => language.code !== "en").map((language) => language.code),
-          selectedTagName,
+          projectForAi.languages.filter((language) => language.code !== "en").map((language) => language.code),
+          request.tagNames,
           {
             busyMessage: "正在批量 AI 补全...",
-            successMessage: `已批量新增 ${createdEntries.length} 条，结果进入待审核。`,
+            successMessage,
             emptyTargetsMessage: "没有可补全语言。"
           }
         );
@@ -1174,6 +1371,37 @@ export function TranslationWorkspace() {
     } catch {
       setSaveState("error");
     }
+  }
+
+  async function batchAddEntries() {
+    const sourceValues = batchSourceText.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+    if (!sourceValues.length || !selectedTagNames.length) return;
+
+    const request = {
+      sourceValues,
+      keyGenerationMode: keyMode,
+      tagNames: [...selectedTagNames]
+    };
+    const duplicateItems = buildDuplicateEnglishCandidates(sourceValues);
+    if (duplicateItems.length) {
+      setDuplicateEnglishAction({ kind: "batch", request, items: duplicateItems });
+      return;
+    }
+
+    await submitBatchEntries(request);
+  }
+
+  async function confirmDuplicateEnglishResolution() {
+    const action = duplicateEnglishAction;
+    if (!action) return;
+    setDuplicateEnglishAction(null);
+
+    if (action.kind === "single") {
+      await submitSingleEntry({ ...action.request, duplicateItem: action.items[0] });
+      return;
+    }
+
+    await submitBatchEntries({ ...action.request, duplicateItems: action.items });
   }
 
   async function addProject() {
@@ -1271,14 +1499,15 @@ export function TranslationWorkspace() {
 
   const translateEntryWithAi = React.useCallback(async (entry: TranslationEntry) => {
     const sourceLanguageCode = entry.sourceLanguage || sourceLanguage;
+    const entryTagNames = entry.tagNames?.length ? entry.tagNames : selectedTagNames;
     await translateProjectEntries(
       activeProject,
       [entry],
       sourceLanguageCode,
       getMissingTargetLanguages(activeProject, entry, sourceLanguageCode),
-      selectedTagName
+      entryTagNames
     );
-  }, [activeProject, getMissingTargetLanguages, selectedTagName, sourceLanguage, translateProjectEntries]);
+  }, [activeProject, getMissingTargetLanguages, selectedTagNames, sourceLanguage, translateProjectEntries]);
 
   const retranslateEntryFromEnglish = React.useCallback(async (entry: TranslationEntry) => {
     const englishText = entry.translations.en?.value.trim();
@@ -1288,13 +1517,14 @@ export function TranslationWorkspace() {
     }
 
     const targetLanguages = activeProject.languages.filter((language) => language.code !== "en").map((language) => language.code);
-    await translateProjectEntries(activeProject, [entry], "en", targetLanguages, selectedTagName, {
+    const entryTagNames = entry.tagNames?.length ? entry.tagNames : selectedTagNames;
+    await translateProjectEntries(activeProject, [entry], "en", targetLanguages, entryTagNames, {
       overwrite: true,
       busyMessage: "正在按英语重翻...",
       successMessage: "已按英语重翻，结果进入待审核。",
       emptyTargetsMessage: "没有可重翻语言。"
     });
-  }, [activeProject, selectedTagName, translateProjectEntries]);
+  }, [activeProject, selectedTagNames, translateProjectEntries]);
 
   async function translateImportPreview() {
     if (!importRows.length) return;
@@ -1382,11 +1612,10 @@ export function TranslationWorkspace() {
   }
 
   async function applyImport() {
-    if (!importRows.length || !selectedTagName) return;
+    if (!importRows.length || !selectedTagNames.length) return;
     setSaveState("saving");
     try {
       const conflictActions = Object.fromEntries(conflicts.map((conflict) => [conflict.key, conflict.action]));
-      const tagNames = [selectedTagName];
       for (let start = 0; start < importRows.length; start += importChunkSize) {
         const rows = importRows.slice(start, start + importChunkSize);
         const response = await fetch(`/api/projects/${activeProject.id}/import`, {
@@ -1396,7 +1625,7 @@ export function TranslationWorkspace() {
             rows,
             conflictActions,
             keyGenerationMode: keyMode,
-            tagNames
+            tagNames: selectedTagNames
           })
         });
         if (!response.ok) throw new Error(await response.text());
@@ -1486,11 +1715,18 @@ export function TranslationWorkspace() {
         accessorKey: "key",
         header: "Key",
         cell: ({ row }) => (
-          <div className="w-[190px] space-y-2">
+          <div className="w-[250px] space-y-2">
             <div className="break-all font-mono text-sm font-medium leading-5">{row.original.key}</div>
-            <div className="mt-1 text-xs text-zinc-500">source: {row.original.sourceLanguage}</div>
-            <div className="space-y-2">
-              <div className="flex flex-wrap gap-2">
+            <div className="text-xs text-zinc-500">source: {row.original.sourceLanguage}</div>
+            <div className="flex min-h-6 flex-wrap gap-1">
+              {(row.original.tagNames ?? []).slice(0, 3).map((tag) => (
+                <TagBadge key={tag} name={tag} color={tagColors[tag]} className="max-w-[210px]" />
+              ))}
+              {(row.original.tagNames ?? []).length > 3 && (
+                <TagBadge name={`+${(row.original.tagNames ?? []).length - 3}`} color={tagColors[(row.original.tagNames ?? [])[0]]} />
+              )}
+            </div>
+            <div className="flex flex-wrap gap-1.5">
                 <Button size="sm" variant="outline" onClick={() => void translateEntryWithAi(row.original)} disabled={aiBusy}>
                   <WandSparkles className="h-3.5 w-3.5" />
                   AI 补全
@@ -1499,11 +1735,12 @@ export function TranslationWorkspace() {
                   <Trash2 className="h-3.5 w-3.5" />
                   删除
                 </Button>
-              </div>
+              <Button size="sm" variant="outline" onClick={() => setEntryTagTarget(row.original)}>
+                Tag
+              </Button>
               <Button
                 size="sm"
                 variant="outline"
-                className="w-full justify-start"
                 onClick={() => void retranslateEntryFromEnglish(row.original)}
                 disabled={aiBusy || !row.original.translations.en?.value.trim()}
                 title="根据英语重新翻译"
@@ -1517,7 +1754,7 @@ export function TranslationWorkspace() {
       },
       ...languageColumns
     ];
-  }, [activeProject.languages, aiBusy, retranslateEntryFromEnglish, setTranslation, translateEntryWithAi]);
+  }, [activeProject.languages, aiBusy, retranslateEntryFromEnglish, setTranslation, tagColors, translateEntryWithAi]);
 
   const table = useReactTable({
     data: paginatedEntries,
@@ -1665,6 +1902,15 @@ export function TranslationWorkspace() {
                   {label}
                 </button>
               ))}
+              <button
+                onClick={() => setActiveTab("tags")}
+                className={cn(
+                  "rounded-md px-3 py-2 text-sm transition-colors",
+                  activeTab === "tags" ? "bg-zinc-950 text-white" : "text-zinc-600 hover:bg-white hover:text-zinc-950"
+                )}
+              >
+                Tag
+              </button>
             </nav>
           </header>
 
@@ -1678,14 +1924,15 @@ export function TranslationWorkspace() {
                 search={search}
                 activeLanguage={activeLanguage}
                 statusFilter={statusFilter}
-                tagFilter={entryTagFilter}
+                tagFilters={entryTagFilters}
                 languages={activeProject.languages}
                 tagOptions={tagOptions}
+                tagColors={tagColors}
                 onSearchChange={setSearch}
                 onSearchSubmit={runEntrySearch}
                 onActiveLanguageChange={setActiveLanguage}
                 onStatusFilterChange={setStatusFilter}
-                onTagFilterChange={setEntryTagFilter}
+                onTagFiltersChange={setEntryTagFilters}
                 onOpenAddDialog={() => setEntryDialogOpen(true)}
                 onOpenBatchAddDialog={() => setBatchDialogOpen(true)}
               >
@@ -1746,15 +1993,16 @@ export function TranslationWorkspace() {
                 reviewDraft={reviewDraft}
                 reviewSearch={reviewSearch}
                 reviewLanguage={reviewLanguage}
-                reviewTagName={reviewTagName}
+                reviewTagNames={reviewTagNames}
                 reviewSort={reviewSort}
                 tagOptions={tagOptions}
+                tagColors={tagColors}
                 reviewPage={reviewPage}
                 reviewPageCount={reviewPageCount}
                 reviewPageSize={reviewPageSize}
                 onReviewSearchChange={setReviewSearch}
                 onReviewLanguageChange={setReviewLanguage}
-                onReviewTagChange={setReviewTagName}
+                onReviewTagChange={setReviewTagNames}
                 onReviewSortChange={setReviewSort}
                 onSelectReview={(item: ReviewItem) => {
                   setSelectedReviewEntryId(item.entry.id);
@@ -1781,9 +2029,9 @@ export function TranslationWorkspace() {
                 conflicts={conflicts}
                 paginatedImportRows={paginatedImportRows}
                 paginatedConflicts={paginatedConflicts}
-                selectedTagName={selectedTagName}
+                selectedTagNames={selectedTagNames}
                 tagOptions={tagOptions}
-                tagDate={tagDate}
+                tagColors={tagColors}
                 aiTargetLanguages={aiTargetLanguages}
                 aiBusy={aiBusy}
                 aiMessage={aiMessage}
@@ -1794,9 +2042,7 @@ export function TranslationWorkspace() {
                 conflictPageCount={conflictPageCount}
                 conflictPageSize={conflictPageSize}
                 onParseFile={(file) => void parseImportFile(file)}
-                onSelectedTagChange={setSelectedTagName}
-                onTagDateChange={setTagDate}
-                onCreateDateTag={() => void createDateTag()}
+                onSelectedTagNamesChange={setSelectedTagNames}
                 onAiTargetLanguagesChange={setAiTargetLanguages}
                 onTranslateImportPreview={() => void translateImportPreview()}
                 onSetConflictAction={setConflictAction}
@@ -1811,6 +2057,15 @@ export function TranslationWorkspace() {
                 localesZipUrl={`/api/projects/${activeProject.id}/export/locales.zip`}
                 onExportAllJson={exportAllJson}
                 onExportExcel={() => void exportExcel()}
+              />
+            )}
+
+            {activeTab === "tags" && (
+              <TagTab
+                project={activeProject}
+                onCreateTag={(tagName, color) => void createTag(tagName, color)}
+                onRenameTag={(oldName, nextName, color) => void renameTag(oldName, nextName, color)}
+                onRequestDeleteTag={setDeleteTagTarget}
               />
             )}
 
@@ -1829,17 +2084,15 @@ export function TranslationWorkspace() {
         open={entryDialogOpen}
         languages={activeProject.languages}
         tagOptions={tagOptions}
-        selectedTagName={selectedTagName}
+        tagColors={tagColors}
+        selectedTagNames={selectedTagNames}
         sourceLanguage={sourceLanguage}
         newEntryKey={newEntryKey}
         keyMode={keyMode}
         sourceText={sourceText}
         aiBusy={aiBusy}
         onClose={() => setEntryDialogOpen(false)}
-        onSelectTag={setSelectedTagName}
-        onCreateTag={(tagName) => void createDateTag(tagName)}
-        onRenameTag={(tagName) => void renameDateTag(tagName)}
-        onDeleteTag={() => setDeleteTagRequested(true)}
+        onTagNamesChange={setSelectedTagNames}
         onSourceLanguageChange={setSourceLanguage}
         onNewEntryKeyChange={setNewEntryKey}
         onKeyModeChange={setKeyMode}
@@ -1850,18 +2103,31 @@ export function TranslationWorkspace() {
       <BatchAddTranslationDialog
         open={batchDialogOpen}
         tagOptions={tagOptions}
-        selectedTagName={selectedTagName}
+        tagColors={tagColors}
+        selectedTagNames={selectedTagNames}
         keyMode={keyMode}
         batchText={batchSourceText}
         aiBusy={aiBusy}
         onClose={() => setBatchDialogOpen(false)}
-        onSelectTag={setSelectedTagName}
-        onCreateTag={(tagName) => void createDateTag(tagName)}
-        onRenameTag={(tagName) => void renameDateTag(tagName)}
-        onDeleteTag={() => setDeleteTagRequested(true)}
+        onTagNamesChange={setSelectedTagNames}
         onKeyModeChange={setKeyMode}
         onBatchTextChange={setBatchSourceText}
         onAddWithAi={() => void batchAddEntries()}
+      />
+      <DuplicateEnglishDialog
+        open={Boolean(duplicateEnglishAction)}
+        items={duplicateEnglishAction?.items ?? []}
+        onCancel={() => setDuplicateEnglishAction(null)}
+        onConfirm={() => void confirmDuplicateEnglishResolution()}
+        onDecisionChange={setDuplicateEnglishDecision}
+        onSetAll={setAllDuplicateEnglishDecisions}
+      />
+      <EntryTagDialog
+        entry={entryTagTarget}
+        tagOptions={tagOptions}
+        tagColors={tagColors}
+        onClose={() => setEntryTagTarget(null)}
+        onSave={(entry, tagNames) => void saveEntryTags(entry, tagNames)}
       />
       <ConfirmDialog
         open={Boolean(deleteEntryTarget)}
@@ -1874,12 +2140,14 @@ export function TranslationWorkspace() {
         }}
       />
       <ConfirmDialog
-        open={deleteTagRequested}
+        open={Boolean(deleteTagTarget)}
         title="删除 Tag"
-        description={selectedTagName ? `确认删除 Tag "${selectedTagName}" 吗？历史翻译内容会保留，只会移除这个 Tag 的关联。` : ""}
+        description={deleteTagTarget ? `确认删除 Tag "${deleteTagTarget}" 吗？历史翻译内容会保留，只会移除这个 Tag 的关联。` : ""}
         confirmLabel="删除 Tag"
-        onCancel={() => setDeleteTagRequested(false)}
-        onConfirm={() => void deleteDateTag()}
+        onCancel={() => setDeleteTagTarget(null)}
+        onConfirm={() => {
+          if (deleteTagTarget) void deleteTag(deleteTagTarget);
+        }}
       />
       <ConfirmDialog
         open={deleteProjectRequested}

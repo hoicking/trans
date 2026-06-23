@@ -1,28 +1,41 @@
 import { prisma } from "@/lib/prisma";
+import { maxTagNameLength, normalizeTagColor, normalizeTagName } from "@/lib/tags";
 import { z } from "zod";
 
+const tagNameSchema = z
+  .string()
+  .transform(normalizeTagName)
+  .refine((value) => value.length > 0 && value.length <= maxTagNameLength, {
+    message: `Tag name must be 1-${maxTagNameLength} characters.`
+  });
+
 const tagSchema = z.object({
-  name: z.string().trim().regex(/^\d{4}\/\d{2}\/\d{2}$/)
+  name: tagNameSchema,
+  color: z.string().optional().transform(normalizeTagColor)
 });
 
 const updateTagSchema = z.object({
-  oldName: z.string().trim().regex(/^\d{4}\/\d{2}\/\d{2}$/),
-  name: z.string().trim().regex(/^\d{4}\/\d{2}\/\d{2}$/)
+  oldName: tagNameSchema,
+  name: tagNameSchema,
+  color: z.string().optional().transform((value) => (value ? normalizeTagColor(value) : undefined))
 });
 
-async function listTagNames(projectId: string) {
+async function listTagPayload(projectId: string) {
   const tags = await prisma.tag.findMany({
     where: { projectId },
     orderBy: { name: "asc" },
-    select: { name: true }
+    select: { name: true, color: true }
   });
 
-  return tags.map((tag) => tag.name);
+  return {
+    tags: tags.map((tag) => tag.name),
+    tagColors: Object.fromEntries(tags.map((tag) => [tag.name, normalizeTagColor(tag.color)]))
+  };
 }
 
 export async function GET(_request: Request, { params }: { params: Promise<{ projectId: string }> }) {
   const { projectId } = await params;
-  return Response.json({ tags: await listTagNames(projectId) });
+  return Response.json(await listTagPayload(projectId));
 }
 
 export async function POST(request: Request, { params }: { params: Promise<{ projectId: string }> }) {
@@ -42,12 +55,15 @@ export async function POST(request: Request, { params }: { params: Promise<{ pro
     },
     create: {
       projectId,
-      name: parsed.data.name
+      name: parsed.data.name,
+      color: parsed.data.color
     },
-    update: {}
+    update: {
+      color: parsed.data.color
+    }
   });
 
-  return Response.json({ tags: await listTagNames(projectId) });
+  return Response.json(await listTagPayload(projectId));
 }
 
 export async function PATCH(request: Request, { params }: { params: Promise<{ projectId: string }> }) {
@@ -58,23 +74,21 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ pr
     return Response.json({ error: parsed.error.flatten() }, { status: 400 });
   }
 
-  const { oldName, name } = parsed.data;
-  if (oldName === name) {
-    return Response.json({ tags: await listTagNames(projectId) });
-  }
+  const { oldName, name, color } = parsed.data;
+  if (oldName !== name) {
+    const existing = await prisma.tag.findUnique({
+      where: {
+        projectId_name: {
+          projectId,
+          name
+        }
+      },
+      select: { id: true }
+    });
 
-  const existing = await prisma.tag.findUnique({
-    where: {
-      projectId_name: {
-        projectId,
-        name
-      }
-    },
-    select: { id: true }
-  });
-
-  if (existing) {
-    return Response.json({ error: "Tag already exists." }, { status: 409 });
+    if (existing) {
+      return Response.json({ error: "Tag already exists." }, { status: 409 });
+    }
   }
 
   const tag = await prisma.tag.findUnique({
@@ -93,10 +107,13 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ pr
 
   await prisma.tag.update({
     where: { id: tag.id },
-    data: { name }
+    data: {
+      name,
+      ...(color ? { color } : {})
+    }
   });
 
-  return Response.json({ tags: await listTagNames(projectId) });
+  return Response.json(await listTagPayload(projectId));
 }
 
 export async function DELETE(request: Request, { params }: { params: Promise<{ projectId: string }> }) {
@@ -114,5 +131,5 @@ export async function DELETE(request: Request, { params }: { params: Promise<{ p
     }
   });
 
-  return Response.json({ tags: await listTagNames(projectId) });
+  return Response.json(await listTagPayload(projectId));
 }

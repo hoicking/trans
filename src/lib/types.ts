@@ -27,6 +27,7 @@ export type TranslationEntry = {
   keyGenerationMode: KeyGenerationMode;
   createdAt: string;
   updatedAt: string;
+  tagNames?: string[];
   translations: Record<string, TranslationValue>;
 };
 
@@ -60,6 +61,7 @@ export type TranslationProject = {
   members: ProjectMember[];
   aiConfig: AiConfig;
   tags?: string[];
+  tagColors?: Record<string, string>;
   createdAt: string;
   updatedAt: string;
 };

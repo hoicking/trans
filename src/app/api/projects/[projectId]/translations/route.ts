@@ -1,5 +1,13 @@
 import { prisma } from "@/lib/prisma";
+import { maxTagNameLength, normalizeTagName } from "@/lib/tags";
 import { z } from "zod";
+
+const tagNameSchema = z
+  .string()
+  .transform(normalizeTagName)
+  .refine((value) => value.length > 0 && value.length <= maxTagNameLength, {
+    message: `Tag name must be 1-${maxTagNameLength} characters.`
+  });
 
 const updateTranslationSchema = z.object({
   entryId: z.string().min(1),
@@ -9,7 +17,8 @@ const updateTranslationSchema = z.object({
   isReviewed: z.boolean().optional(),
   refreshTranslatedMeta: z.boolean().optional(),
   actorName: z.string().min(1).default("Admin"),
-  tagName: z.string().trim().regex(/^\d{4}\/\d{2}\/\d{2}$/).optional()
+  tagName: tagNameSchema.optional(),
+  tagNames: z.array(tagNameSchema).optional()
 });
 
 async function ensureActor(actorName: string) {
@@ -32,7 +41,18 @@ export async function PATCH(request: Request) {
     return Response.json({ error: parsed.error.flatten() }, { status: 400 });
   }
 
-  const { entryId, languageCode, value, isTranslated, isReviewed = false, refreshTranslatedMeta = false, actorName, tagName } = parsed.data;
+  const {
+    entryId,
+    languageCode,
+    value,
+    isTranslated,
+    isReviewed = false,
+    refreshTranslatedMeta = false,
+    actorName
+  } = parsed.data;
+  const tagNames = Array.from(
+    new Set([...(parsed.data.tagNames ?? []), parsed.data.tagName].filter((name): name is string => Boolean(name)))
+  );
   const actor = await ensureActor(actorName);
   const now = new Date();
   const existing = await prisma.translationValue.findUnique({
@@ -81,37 +101,38 @@ export async function PATCH(request: Request) {
     data: { updatedAt: now }
   });
 
-  if (tagName) {
+  if (tagNames.length) {
     const entry = await prisma.translationEntry.findUnique({
       where: { id: entryId },
       select: { projectId: true }
     });
     if (entry) {
-      const tag = await prisma.tag.upsert({
-        where: {
-          projectId_name: {
-            projectId: entry.projectId,
-            name: tagName
-          }
-        },
-        create: {
-          projectId: entry.projectId,
-          name: tagName
-        },
-        update: {}
+      const tags = await Promise.all(
+        tagNames.map((tagName) =>
+          prisma.tag.upsert({
+            where: {
+              projectId_name: {
+                projectId: entry.projectId,
+                name: tagName
+              }
+            },
+            create: {
+              projectId: entry.projectId,
+              name: tagName
+            },
+            update: {}
+          })
+        )
+      );
+      const values = await prisma.translationValue.findMany({
+        where: { entryId },
+        select: { id: true }
       });
-      await prisma.translationValueTag.upsert({
-        where: {
-          translationValueId_tagId: {
-            translationValueId: translationValue.id,
-            tagId: tag.id
-          }
-        },
-        create: {
-          translationValueId: translationValue.id,
-          tagId: tag.id
-        },
-        update: {}
+      await prisma.translationValueTag.createMany({
+        data: values
+          .concat(values.some((value) => value.id === translationValue.id) ? [] : [{ id: translationValue.id }])
+          .flatMap((value) => tags.map((tag) => ({ translationValueId: value.id, tagId: tag.id }))),
+        skipDuplicates: true
       });
     }
   }

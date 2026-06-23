@@ -1,6 +1,7 @@
 import { prisma } from "@/lib/prisma";
 import { defaultLanguages, seedProjects } from "@/lib/seed";
 import { defaultTranslationVibe } from "@/lib/ai-defaults";
+import { normalizeTagColor, uniqueTagNames } from "@/lib/tags";
 import type { AiConfig, TranslationProject, TranslationEntry, TranslationValue } from "@/lib/types";
 
 type ProjectWithRelations = Awaited<ReturnType<typeof getProjectRecords>>[number];
@@ -115,6 +116,9 @@ function mapProject(project: ProjectWithRelations): TranslationProject {
           }
         ])
       );
+      const entryTagNames = Array.from(
+        new Set(entry.values.flatMap((value) => value.tags.map((item) => item.tag.name)))
+      ).sort();
 
       return {
         id: entry.id,
@@ -123,6 +127,7 @@ function mapProject(project: ProjectWithRelations): TranslationProject {
         keyGenerationMode: entry.keyGenerationMode === "SEMANTIC" ? "semantic" : "text",
         createdAt: entry.createdAt.toISOString(),
         updatedAt: entry.updatedAt.toISOString(),
+        tagNames: entryTagNames,
         translations
       };
     }),
@@ -134,6 +139,7 @@ function mapProject(project: ProjectWithRelations): TranslationProject {
     })),
     aiConfig: mapAiConfig(project),
     tags: project.tags.map((tag) => tag.name),
+    tagColors: Object.fromEntries(project.tags.map((tag) => [tag.name, normalizeTagColor(tag.color)])),
     createdAt: project.createdAt.toISOString(),
     updatedAt: project.updatedAt.toISOString()
   };
@@ -257,6 +263,40 @@ export async function saveProject(project: TranslationProject) {
           }
         }
       });
+      const tagNames = uniqueTagNames([
+        ...(entry.tagNames ?? []),
+        ...Object.values(entry.translations).flatMap((value) => value.tagNames ?? [])
+      ]);
+      if (tagNames.length) {
+        const tags = await Promise.all(
+          tagNames.map((tagName) =>
+            tx.tag.upsert({
+              where: {
+                projectId_name: {
+                  projectId: project.id,
+                  name: tagName
+                }
+              },
+              create: {
+                projectId: project.id,
+                name: tagName,
+                color: normalizeTagColor(project.tagColors?.[tagName])
+              },
+              update: {
+                color: normalizeTagColor(project.tagColors?.[tagName])
+              }
+            })
+          )
+        );
+        const values = await tx.translationValue.findMany({
+          where: { entryId: entry.id },
+          select: { id: true }
+        });
+        await tx.translationValueTag.createMany({
+          data: values.flatMap((value) => tags.map((tag) => ({ translationValueId: value.id, tagId: tag.id }))),
+          skipDuplicates: true
+        });
+      }
     }
   });
 }

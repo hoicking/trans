@@ -1,4 +1,5 @@
 import { prisma } from "@/lib/prisma";
+import { maxTagNameLength, normalizeTagName } from "@/lib/tags";
 import { semanticKey, slugKey, uniqueKey } from "@/lib/utils";
 import { z } from "zod";
 
@@ -8,11 +9,18 @@ const importRowSchema = z.object({
   values: z.record(z.string(), z.string())
 });
 
+const tagNameSchema = z
+  .string()
+  .transform(normalizeTagName)
+  .refine((value) => value.length > 0 && value.length <= maxTagNameLength, {
+    message: `Tag name must be 1-${maxTagNameLength} characters.`
+  });
+
 const importSchema = z.object({
   rows: z.array(importRowSchema),
   conflictActions: z.record(z.string(), z.enum(["overwrite", "append", "keep"])).default({}),
   keyGenerationMode: z.enum(["semantic", "text"]).default("semantic"),
-  tagNames: z.array(z.string().trim().regex(/^\d{4}\/\d{2}\/\d{2}$/)).min(1)
+  tagNames: z.array(tagNameSchema).min(1)
 });
 
 const languageNames: Record<string, string> = {
@@ -51,7 +59,7 @@ export async function POST(request: Request, { params }: { params: Promise<{ pro
   const actor = await ensureActor();
   let imported = 0;
   let skipped = 0;
-  const cleanTagNames = Array.from(new Set(tagNames.map((tag) => tag.trim()).filter(Boolean)));
+  const cleanTagNames = Array.from(new Set(tagNames));
 
   await prisma.$transaction(
     async (tx) => {
@@ -138,7 +146,7 @@ export async function POST(request: Request, { params }: { params: Promise<{ pro
 
         for (const [languageCode, value] of Object.entries(row.values)) {
           const cleanValue = value.trim();
-          const translationValue = await tx.translationValue.upsert({
+          await tx.translationValue.upsert({
             where: {
               entryId_languageCode: {
                 entryId: entry.id,
@@ -166,22 +174,17 @@ export async function POST(request: Request, { params }: { params: Promise<{ pro
               reviewedById: null
             }
           });
-          for (const tagId of tags.values()) {
-            await tx.translationValueTag.upsert({
-              where: {
-                translationValueId_tagId: {
-                  translationValueId: translationValue.id,
-                  tagId
-                }
-              },
-              create: {
-                translationValueId: translationValue.id,
-                tagId
-              },
-              update: {}
-            });
-          }
         }
+        const entryValues = await tx.translationValue.findMany({
+          where: { entryId: entry.id },
+          select: { id: true }
+        });
+        await tx.translationValueTag.createMany({
+          data: entryValues.flatMap((value) =>
+            Array.from(tags.values()).map((tagId) => ({ translationValueId: value.id, tagId }))
+          ),
+          skipDuplicates: true
+        });
         entryByKey.set(resolvedKey, { id: entry.id, key: resolvedKey });
         if (resolvedKey === requestedKey) {
           entryByKey.set(requestedKey, { id: entry.id, key: requestedKey });

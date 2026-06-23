@@ -1,6 +1,6 @@
 "use client";
 
-import { Plus, Upload, WandSparkles } from "lucide-react";
+import { Upload, WandSparkles } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -8,6 +8,7 @@ import { Select } from "@/components/ui/select";
 import type { ConflictAction, ImportConflict, ImportRow, TranslationProject } from "@/lib/types";
 import { Metric } from "./metric";
 import { PaginationBar } from "./pagination-bar";
+import { TagPicker } from "./tag-picker";
 
 export function ImportTab({
   project,
@@ -16,9 +17,9 @@ export function ImportTab({
   conflicts,
   paginatedImportRows,
   paginatedConflicts,
-  selectedTagName,
+  selectedTagNames,
   tagOptions,
-  tagDate,
+  tagColors,
   aiTargetLanguages,
   aiBusy,
   aiMessage,
@@ -29,9 +30,7 @@ export function ImportTab({
   conflictPageCount,
   conflictPageSize,
   onParseFile,
-  onSelectedTagChange,
-  onTagDateChange,
-  onCreateDateTag,
+  onSelectedTagNamesChange,
   onAiTargetLanguagesChange,
   onTranslateImportPreview,
   onSetConflictAction,
@@ -45,9 +44,9 @@ export function ImportTab({
   conflicts: ImportConflict[];
   paginatedImportRows: ImportRow[];
   paginatedConflicts: ImportConflict[];
-  selectedTagName: string;
+  selectedTagNames: string[];
   tagOptions: string[];
-  tagDate: string;
+  tagColors: Record<string, string>;
   aiTargetLanguages: string;
   aiBusy: boolean;
   aiMessage: string;
@@ -58,9 +57,7 @@ export function ImportTab({
   conflictPageCount: number;
   conflictPageSize: number;
   onParseFile: (file: File) => void;
-  onSelectedTagChange: (value: string) => void;
-  onTagDateChange: (value: string) => void;
-  onCreateDateTag: () => void;
+  onSelectedTagNamesChange: (value: string[]) => void;
   onAiTargetLanguagesChange: (value: string) => void;
   onTranslateImportPreview: () => void;
   onSetConflictAction: (conflictId: string, action: ConflictAction) => void;
@@ -90,28 +87,16 @@ export function ImportTab({
         </label>
       </div>
 
-      <div className="grid gap-3 rounded-md border bg-zinc-50 p-3 md:grid-cols-[minmax(220px,1fr)_180px_auto]">
-        <label className="space-y-1.5 text-xs font-medium text-zinc-500">
-          导入 Tag
-          <Select value={selectedTagName} onChange={(event) => onSelectedTagChange(event.target.value)}>
-            {!tagOptions.length && <option value="">暂无 Tag</option>}
-            {tagOptions.map((tag) => (
-              <option key={tag} value={tag}>
-                {tag}
-              </option>
-            ))}
-          </Select>
-        </label>
-        <label className="space-y-1.5 text-xs font-medium text-zinc-500">
-          新建日期 Tag
-          <Input type="date" value={tagDate} onChange={(event) => onTagDateChange(event.target.value)} />
-        </label>
-        <div className="flex items-end">
-          <Button variant="outline" onClick={onCreateDateTag} disabled={!tagDate}>
-            <Plus className="h-4 w-4" />
-            创建 Tag
-          </Button>
-        </div>
+      <div className="rounded-md border bg-zinc-50 p-3">
+        <TagPicker
+          label="导入 Tag"
+          tagOptions={tagOptions}
+          tagColors={tagColors}
+          selectedTagNames={selectedTagNames}
+          onChange={onSelectedTagNamesChange}
+          allowCreate={false}
+          required
+        />
       </div>
 
       <div className="grid gap-3 rounded-md border bg-zinc-50 p-3 md:grid-cols-[1fr_auto]">
@@ -197,7 +182,7 @@ export function ImportTab({
         </table>
       </div>
       <PaginationBar page={importPage} pageCount={importPageCount} total={importRows.length} pageSize={importPageSize} onPageChange={onImportPageChange} />
-      <Button onClick={onApplyImport} disabled={!importRows.length || !selectedTagName}>
+      <Button onClick={onApplyImport} disabled={!importRows.length || !selectedTagNames.length}>
         应用导入
       </Button>
     </section>

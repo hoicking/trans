@@ -1,13 +1,22 @@
 import { prisma } from "@/lib/prisma";
 import { listProjects } from "@/lib/project-store";
+import { maxTagNameLength, normalizeTagName } from "@/lib/tags";
 import { semanticKey, slugKey, uniqueKey } from "@/lib/utils";
 import { z } from "zod";
+
+const tagNameSchema = z
+  .string()
+  .transform(normalizeTagName)
+  .refine((value) => value.length > 0 && value.length <= maxTagNameLength, {
+    message: `Tag name must be 1-${maxTagNameLength} characters.`
+  });
 
 const createBatchEntriesSchema = z.object({
   sourceLanguage: z.string().min(1).default("en"),
   sourceValues: z.array(z.string().trim().min(1)).min(1).max(200),
   keyGenerationMode: z.enum(["semantic", "text"]),
-  tagName: z.string().trim().regex(/^\d{4}\/\d{2}\/\d{2}$/)
+  tagName: tagNameSchema.optional(),
+  tagNames: z.array(tagNameSchema).optional()
 });
 
 function emptyTranslation(value: string, now: Date, actorId: string | null) {
@@ -44,7 +53,14 @@ export async function POST(request: Request, { params }: { params: Promise<{ pro
     return Response.json({ error: parsed.error.flatten() }, { status: 400 });
   }
 
-  const { sourceLanguage, sourceValues, keyGenerationMode, tagName } = parsed.data;
+  const { sourceLanguage, sourceValues, keyGenerationMode } = parsed.data;
+  const tagNames = Array.from(
+    new Set([...(parsed.data.tagNames ?? []), parsed.data.tagName].filter((name): name is string => Boolean(name)))
+  );
+  if (!tagNames.length) {
+    return Response.json({ error: "At least one tag is required." }, { status: 400 });
+  }
+
   const actor = await ensureActor();
   const now = new Date();
   const entryIds = await prisma.$transaction(async (tx) => {
@@ -54,19 +70,23 @@ export async function POST(request: Request, { params }: { params: Promise<{ pro
       select: { key: true }
     });
     const keySet = new Set(existingEntries.map((entry) => entry.key));
-    const tag = await tx.tag.upsert({
-      where: {
-        projectId_name: {
-          projectId,
-          name: tagName.trim()
-        }
-      },
-      create: {
-        projectId,
-        name: tagName.trim()
-      },
-      update: {}
-    });
+    const tags = await Promise.all(
+      tagNames.map((tagName) =>
+        tx.tag.upsert({
+          where: {
+            projectId_name: {
+              projectId,
+              name: tagName
+            }
+          },
+          create: {
+            projectId,
+            name: tagName
+          },
+          update: {}
+        })
+      )
+    );
     const createdEntryIds: string[] = [];
 
     for (const sourceValue of sourceValues) {
@@ -89,29 +109,14 @@ export async function POST(request: Request, { params }: { params: Promise<{ pro
       });
       createdEntryIds.push(entry.id);
 
-      const sourceValueRecord = await tx.translationValue.findUnique({
-        where: {
-          entryId_languageCode: {
-            entryId: entry.id,
-            languageCode: sourceLanguage
-          }
-        }
+      const values = await tx.translationValue.findMany({
+        where: { entryId: entry.id },
+        select: { id: true }
       });
-      if (sourceValueRecord) {
-        await tx.translationValueTag.upsert({
-          where: {
-            translationValueId_tagId: {
-              translationValueId: sourceValueRecord.id,
-              tagId: tag.id
-            }
-          },
-          create: {
-            translationValueId: sourceValueRecord.id,
-            tagId: tag.id
-          },
-          update: {}
-        });
-      }
+      await tx.translationValueTag.createMany({
+        data: values.flatMap((value) => tags.map((tag) => ({ translationValueId: value.id, tagId: tag.id }))),
+        skipDuplicates: true
+      });
     }
 
     await tx.translationProject.update({

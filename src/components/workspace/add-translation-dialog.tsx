@@ -6,23 +6,21 @@ import { Input } from "@/components/ui/input";
 import { Select } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
 import type { KeyGenerationMode, Language } from "@/lib/types";
-import { TagManager } from "./tag-manager";
+import { TagPicker } from "./tag-picker";
 
 export function AddTranslationDialog({
   open,
   languages,
   tagOptions,
-  selectedTagName,
+  tagColors,
+  selectedTagNames,
   sourceLanguage,
   newEntryKey,
   keyMode,
   sourceText,
   aiBusy,
   onClose,
-  onSelectTag,
-  onCreateTag,
-  onRenameTag,
-  onDeleteTag,
+  onTagNamesChange,
   onSourceLanguageChange,
   onNewEntryKeyChange,
   onKeyModeChange,
@@ -33,17 +31,15 @@ export function AddTranslationDialog({
   open: boolean;
   languages: Language[];
   tagOptions: string[];
-  selectedTagName: string;
+  tagColors: Record<string, string>;
+  selectedTagNames: string[];
   sourceLanguage: string;
   newEntryKey: string;
   keyMode: KeyGenerationMode;
   sourceText: string;
   aiBusy: boolean;
   onClose: () => void;
-  onSelectTag: (tagName: string) => void;
-  onCreateTag: (tagName: string) => void | Promise<void>;
-  onRenameTag: (nextTagName: string) => void | Promise<void>;
-  onDeleteTag: () => void | Promise<void>;
+  onTagNamesChange: (tagNames: string[]) => void;
   onSourceLanguageChange: (languageCode: string) => void;
   onNewEntryKeyChange: (key: string) => void;
   onKeyModeChange: (mode: KeyGenerationMode) => void;
@@ -67,13 +63,13 @@ export function AddTranslationDialog({
         </div>
 
         <div className="min-h-0 flex-1 space-y-4 overflow-y-auto p-5">
-          <TagManager
+          <TagPicker
             tagOptions={tagOptions}
-            selectedTagName={selectedTagName}
-            onSelectTag={onSelectTag}
-            onCreateTag={onCreateTag}
-            onRenameTag={onRenameTag}
-            onDeleteTag={onDeleteTag}
+            tagColors={tagColors}
+            selectedTagNames={selectedTagNames}
+            onChange={onTagNamesChange}
+            allowCreate={false}
+            required
             disabled={aiBusy}
           />
 
@@ -117,11 +113,11 @@ export function AddTranslationDialog({
           <Button variant="outline" onClick={onClose}>
             取消
           </Button>
-          <Button onClick={onAdd} disabled={!sourceText.trim() || !selectedTagName || aiBusy}>
+          <Button onClick={onAdd} disabled={!sourceText.trim() || !selectedTagNames.length || aiBusy}>
             <Plus className="h-4 w-4" />
             添加
           </Button>
-          <Button onClick={onAddWithAi} disabled={!sourceText.trim() || !selectedTagName || aiBusy}>
+          <Button onClick={onAddWithAi} disabled={!sourceText.trim() || !selectedTagNames.length || aiBusy}>
             <WandSparkles className="h-4 w-4" />
             添加并 AI 补全
           </Button>

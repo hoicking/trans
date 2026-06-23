@@ -199,6 +199,7 @@ model Tag {
   id        String   @id @default(cuid())
   projectId String
   name      String
+  color     String   @default("#71717a")
   createdAt DateTime @default(now())
 
   project TranslationProject @relation(fields: [projectId], references: [id], onDelete: Cascade)
