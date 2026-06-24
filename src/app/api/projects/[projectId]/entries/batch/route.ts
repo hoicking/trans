@@ -14,6 +14,7 @@ const tagNameSchema = z
 const createBatchEntriesSchema = z.object({
   sourceLanguage: z.string().min(1).default("en"),
   sourceValues: z.array(z.string().trim().min(1)).min(1).max(200),
+  keys: z.array(z.string().trim()).optional(),
   keyGenerationMode: z.enum(["semantic", "text"]),
   tagName: tagNameSchema.optional(),
   tagNames: z.array(tagNameSchema).optional()
@@ -53,7 +54,7 @@ export async function POST(request: Request, { params }: { params: Promise<{ pro
     return Response.json({ error: parsed.error.flatten() }, { status: 400 });
   }
 
-  const { sourceLanguage, sourceValues, keyGenerationMode } = parsed.data;
+  const { sourceLanguage, sourceValues, keys, keyGenerationMode } = parsed.data;
   const tagNames = Array.from(
     new Set([...(parsed.data.tagNames ?? []), parsed.data.tagName].filter((name): name is string => Boolean(name)))
   );
@@ -89,8 +90,9 @@ export async function POST(request: Request, { params }: { params: Promise<{ pro
     );
     const createdEntryIds: string[] = [];
 
-    for (const sourceValue of sourceValues) {
-      const baseKey = keyGenerationMode === "semantic" ? semanticKey(sourceValue) : slugKey(sourceValue);
+    for (const [index, sourceValue] of sourceValues.entries()) {
+      const requestedKey = keys?.[index]?.trim();
+      const baseKey = requestedKey || (keyGenerationMode === "semantic" ? semanticKey(sourceValue) : slugKey(sourceValue));
       const key = uniqueKey(baseKey, keySet);
       keySet.add(key);
       const entry = await tx.translationEntry.create({

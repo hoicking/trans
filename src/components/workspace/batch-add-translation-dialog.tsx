@@ -4,32 +4,38 @@ import { ListPlus, WandSparkles } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Select } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
-import type { KeyGenerationMode } from "@/lib/types";
+import type { KeyGenerationMode, Language } from "@/lib/types";
 import { TagPicker } from "./tag-picker";
 
 export function BatchAddTranslationDialog({
   open,
+  languages,
   tagOptions,
   tagColors,
   selectedTagNames,
+  sourceLanguage,
   keyMode,
   batchText,
   aiBusy,
   onClose,
   onTagNamesChange,
+  onSourceLanguageChange,
   onKeyModeChange,
   onBatchTextChange,
   onAddWithAi
 }: {
   open: boolean;
+  languages: Language[];
   tagOptions: string[];
   tagColors: Record<string, string>;
   selectedTagNames: string[];
+  sourceLanguage: string;
   keyMode: KeyGenerationMode;
   batchText: string;
   aiBusy: boolean;
   onClose: () => void;
   onTagNamesChange: (tagNames: string[]) => void;
+  onSourceLanguageChange: (languageCode: string) => void;
   onKeyModeChange: (mode: KeyGenerationMode) => void;
   onBatchTextChange: (text: string) => void;
   onAddWithAi: () => void;
@@ -45,7 +51,7 @@ export function BatchAddTranslationDialog({
         <div className="flex items-start justify-between gap-4 border-b px-5 py-4">
           <div>
             <h2 className="text-lg font-semibold">批量新增</h2>
-            <p className="mt-1 text-sm text-zinc-500">每行一条英文，创建后自动补全其他语言。</p>
+            <p className="mt-1 text-sm text-zinc-500">选择文本语言后，每行创建一条翻译并自动补全其他语言。</p>
           </div>
           <Button variant="outline" onClick={onClose}>
             关闭
@@ -63,20 +69,36 @@ export function BatchAddTranslationDialog({
             disabled={aiBusy}
           />
 
-          <label className="block space-y-1.5 text-xs font-medium text-zinc-500">
-            Key 生成
-            <Select value={keyMode} onChange={(event) => onKeyModeChange(event.target.value as KeyGenerationMode)} disabled={aiBusy}>
-              <option value="semantic">语义化 key</option>
-              <option value="text">文本 key</option>
-            </Select>
-          </label>
+          <div className="grid gap-3 md:grid-cols-2">
+            <label className="space-y-1.5 text-xs font-medium text-zinc-500">
+              文本语言
+              <Select value={sourceLanguage} onChange={(event) => onSourceLanguageChange(event.target.value)} disabled={aiBusy}>
+                {languages.map((language) => (
+                  <option key={language.code} value={language.code}>
+                    {language.code} · {language.name}
+                  </option>
+                ))}
+              </Select>
+            </label>
+            <label className="space-y-1.5 text-xs font-medium text-zinc-500">
+              Key 生成
+              <Select value={keyMode} onChange={(event) => onKeyModeChange(event.target.value as KeyGenerationMode)} disabled={aiBusy}>
+                <option value="semantic">语义化 key</option>
+                <option value="text">文本 key</option>
+              </Select>
+            </label>
+          </div>
 
           <label className="block space-y-1.5 text-xs font-medium text-zinc-500">
-            英文文本
+            {sourceLanguage === "en" ? "英文文本" : `${sourceLanguage} 文本`}
             <Textarea
               value={batchText}
               onChange={(event) => onBatchTextChange(event.target.value)}
-              placeholder={"Plan vs Actual comparison\nExecution Progress\nGrid Feed-in Today"}
+              placeholder={
+                sourceLanguage === "en"
+                  ? "Plan vs Actual comparison\nExecution Progress\nGrid Feed-in Today"
+                  : "计划与实际对比\n执行进度\n今日并网电量"
+              }
               className="min-h-[260px] resize-y leading-6"
               disabled={aiBusy}
             />

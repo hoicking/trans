@@ -61,6 +61,8 @@ export async function POST(request: Request) {
           "You are a professional product localization translator.",
           "Return only valid JSON.",
           "Preserve placeholders, ICU variables, HTML tags, and product terms.",
+          "Keep translations concise and suitable for energy storage product UI.",
+          "Prefer common energy-storage industry terminology and abbreviations when natural.",
           "Do not add explanations.",
           "Do not prefix translations with language codes such as [zh], [ro], [pl], or [it].",
           translationVibe ? `Project translation style: ${translationVibe}` : ""

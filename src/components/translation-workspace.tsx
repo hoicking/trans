@@ -80,13 +80,20 @@ type SingleEntrySubmission = {
   tagNames: string[];
   translate: boolean;
   duplicateItem?: DuplicateEnglishCandidate;
+  generatedTranslations?: Record<string, string>;
+  generatedTargetLanguages?: string[];
 };
 
 type BatchEntrySubmission = {
   sourceValues: string[];
+  sourceLanguage: string;
   keyGenerationMode: KeyGenerationMode;
   tagNames: string[];
   duplicateItems?: DuplicateEnglishCandidate[];
+  generatedKeys?: string[];
+  generatedTranslations?: Record<string, Record<string, string>>;
+  generatedTargetLanguages?: string[];
+  sourceItemKeys?: string[];
 };
 
 type PendingDuplicateEnglishAction =
@@ -300,6 +307,7 @@ export function TranslationWorkspace() {
   const [sourceLanguage, setSourceLanguage] = React.useState("en");
   const [entryDialogOpen, setEntryDialogOpen] = React.useState(false);
   const [batchDialogOpen, setBatchDialogOpen] = React.useState(false);
+  const [batchSourceLanguage, setBatchSourceLanguage] = React.useState("en");
   const [batchSourceText, setBatchSourceText] = React.useState("");
   const [keyMode, setKeyMode] = React.useState<KeyGenerationMode>("semantic");
   const [importRows, setImportRows] = React.useState<ImportRow[]>([]);
@@ -776,6 +784,103 @@ export function TranslationWorkspace() {
     []
   );
 
+  function createKeyFromEnglish(englishText: string, mode: KeyGenerationMode) {
+    return mode === "semantic" ? semanticKey(englishText) : slugKey(englishText);
+  }
+
+  function mergeLanguageCodes(...groups: string[][]) {
+    const seen = new Set<string>();
+    const codes: string[] = [];
+    for (const code of groups.flat()) {
+      const normalized = code.toLowerCase();
+      if (!normalized || seen.has(normalized)) continue;
+      seen.add(normalized);
+      codes.push(code);
+    }
+    return codes;
+  }
+
+  async function prepareSingleEntryWithEnglishKey(request: Omit<SingleEntrySubmission, "duplicateItem">) {
+    if (request.sourceLanguage.toLowerCase() === "en" || !request.translate) return request;
+
+    const targetLanguages = getTargetLanguages(activeProject, request.sourceLanguage);
+    if (!targetLanguages.includes("en")) {
+      setAiMessage("项目缺少英文语言，无法根据英文译文生成 key。");
+      return null;
+    }
+
+    const itemKey = makeId("draft");
+    setAiBusy(true);
+    setAiMessage("正在生成英文 key 和 AI 译文...");
+    try {
+      const result = await requestAiTranslations(activeProject, request.sourceLanguage, targetLanguages, [
+        { key: itemKey, text: request.text }
+      ]);
+      if (result.failure) {
+        setAiMessage(`AI 服务调用失败：${result.failure}。未创建翻译。`);
+        return null;
+      }
+
+      const generatedTranslations = result.translations[itemKey] ?? {};
+      const englishText = generatedTranslations.en?.trim();
+      if (!englishText) {
+        setAiMessage("AI 未返回英文译文，无法生成 key。未创建翻译。");
+        return null;
+      }
+
+      return {
+        ...request,
+        key: request.key ?? createKeyFromEnglish(englishText, request.keyGenerationMode),
+        generatedTranslations,
+        generatedTargetLanguages: targetLanguages
+      };
+    } finally {
+      setAiBusy(false);
+    }
+  }
+
+  async function prepareBatchEntriesWithEnglishKeys(request: Omit<BatchEntrySubmission, "duplicateItems">) {
+    if (request.sourceLanguage.toLowerCase() === "en") return request;
+
+    const targetLanguages = getTargetLanguages(activeProject, request.sourceLanguage);
+    if (!targetLanguages.includes("en")) {
+      setAiMessage("项目缺少英文语言，无法根据英文译文生成 key。");
+      return null;
+    }
+
+    const sourceItemKeys = request.sourceValues.map((_, index) => makeId(`draft_${index}`));
+    setAiBusy(true);
+    setAiMessage("正在批量生成英文 key 和 AI 译文...");
+    try {
+      const result = await requestAiTranslations(
+        activeProject,
+        request.sourceLanguage,
+        targetLanguages,
+        request.sourceValues.map((text, index) => ({ key: sourceItemKeys[index], text }))
+      );
+      if (result.failure) {
+        setAiMessage(`AI 服务调用失败：${result.failure}。未创建翻译。`);
+        return null;
+      }
+
+      const englishValues = sourceItemKeys.map((itemKey) => result.translations[itemKey]?.en?.trim() ?? "");
+      if (englishValues.some((value) => !value)) {
+        setAiMessage("AI 未返回完整英文译文，无法批量生成 key。未创建翻译。");
+        return null;
+      }
+
+      return {
+        ...request,
+        generatedKeys: englishValues.map((englishText) => createKeyFromEnglish(englishText, request.keyGenerationMode)),
+        generatedTranslations: result.translations,
+        generatedTargetLanguages: targetLanguages,
+        sourceItemKeys
+      };
+    } finally {
+      setAiBusy(false);
+    }
+  }
+
   const mergeProjectTranslations = React.useCallback(
     async (
       project: TranslationProject,
@@ -1229,6 +1334,23 @@ export function TranslationWorkspace() {
       setSourceText("");
       setEntryDialogOpen(false);
       setActiveTab("translations");
+      if (request.generatedTranslations && request.generatedTargetLanguages) {
+        const nextProject = await mergeProjectTranslations(
+          activeProject,
+          {
+            [existingEntry.key]: {
+              ...request.generatedTranslations,
+              [request.sourceLanguage]: request.text
+            }
+          },
+          mergeLanguageCodes(request.generatedTargetLanguages, [request.sourceLanguage]),
+          request.tagNames
+        );
+        setAiMessage(`已沿用旧 key "${existingEntry.key}"，并补全缺失译文。`);
+        setProjects((current) => current.map((project) => (project.id === nextProject.id ? nextProject : project)));
+        return;
+      }
+
       setAiMessage(`已沿用旧 key "${existingEntry.key}"。`);
       if (request.translate) {
         await translateProjectEntries(
@@ -1269,13 +1391,28 @@ export function TranslationWorkspace() {
       if (request.translate && payload.project && payload.entryId) {
         const entry = payload.project.entries.find((item) => item.id === payload.entryId);
         if (entry) {
-          await translateProjectEntries(
-            payload.project,
-            [entry],
-            request.sourceLanguage,
-            getMissingTargetLanguages(payload.project, entry, request.sourceLanguage),
-            request.tagNames
-          );
+          if (request.generatedTranslations && request.generatedTargetLanguages) {
+            await mergeProjectTranslations(
+              payload.project,
+              {
+                [entry.key]: {
+                  ...request.generatedTranslations,
+                  [request.sourceLanguage]: request.text
+                }
+              },
+              mergeLanguageCodes(request.generatedTargetLanguages, [request.sourceLanguage]),
+              request.tagNames
+            );
+            setAiMessage("已根据英文译文生成 key，并补全缺失译文。");
+          } else {
+            await translateProjectEntries(
+              payload.project,
+              [entry],
+              request.sourceLanguage,
+              getMissingTargetLanguages(payload.project, entry, request.sourceLanguage),
+              request.tagNames
+            );
+          }
         }
       }
     } catch {
@@ -1286,7 +1423,7 @@ export function TranslationWorkspace() {
   async function addEntry(options?: { translate?: boolean }) {
     const text = sourceText.trim();
     if (!text || !selectedTagNames.length) return;
-    const request = {
+    const draftRequest = {
       text,
       key: newEntryKey.trim() || undefined,
       sourceLanguage,
@@ -1294,7 +1431,11 @@ export function TranslationWorkspace() {
       tagNames: [...selectedTagNames],
       translate: Boolean(options?.translate)
     };
-    const duplicateItems = sourceLanguage.toLowerCase() === "en" ? buildDuplicateEnglishCandidates([text]) : [];
+    const request = await prepareSingleEntryWithEnglishKey(draftRequest);
+    if (!request) return;
+
+    const englishText = request.sourceLanguage.toLowerCase() === "en" ? request.text : request.generatedTranslations?.en;
+    const duplicateItems = englishText ? buildDuplicateEnglishCandidates([englishText]) : [];
     if (duplicateItems.length) {
       setDuplicateEnglishAction({ kind: "single", request, items: duplicateItems });
       return;
@@ -1311,7 +1452,9 @@ export function TranslationWorkspace() {
         .map((item) => item.sourceValueIndex as number)
     );
     const reusedEntryIds = Array.from(new Set(duplicateItems.filter((item) => item.decision === "reuse").map((item) => item.existingEntryId)));
-    const sourceValuesToCreate = request.sourceValues.filter((_, index) => !reuseSourceIndexes.has(index));
+    const createdSourceIndexes = request.sourceValues.map((_, index) => index).filter((index) => !reuseSourceIndexes.has(index));
+    const sourceValuesToCreate = createdSourceIndexes.map((index) => request.sourceValues[index]);
+    const keysToCreate = request.generatedKeys ? createdSourceIndexes.map((index) => request.generatedKeys?.[index] ?? "") : undefined;
     let projectForAi = activeProject;
     let createdEntryIds: string[] = [];
 
@@ -1322,8 +1465,9 @@ export function TranslationWorkspace() {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
-            sourceLanguage: "en",
+            sourceLanguage: request.sourceLanguage,
             sourceValues: sourceValuesToCreate,
+            keys: keysToCreate?.some(Boolean) ? keysToCreate : undefined,
             keyGenerationMode: request.keyGenerationMode,
             tagNames: request.tagNames
           })
@@ -1343,7 +1487,9 @@ export function TranslationWorkspace() {
       window.setTimeout(() => setSaveState("idle"), 1600);
       setActiveTab("translations");
 
-      const createdEntries = entriesByIds(projectForAi, createdEntryIds);
+      const createdEntries = createdEntryIds
+        .map((entryId) => projectForAi.entries.find((entry) => entry.id === entryId))
+        .filter((entry): entry is TranslationEntry => Boolean(entry));
       const reusedEntries = entriesByIds(projectForAi, reusedEntryIds);
       const entriesForAi = Array.from(new Map([...createdEntries, ...reusedEntries].map((entry) => [entry.id, entry])).values());
       if (entriesForAi.length) {
@@ -1355,18 +1501,58 @@ export function TranslationWorkspace() {
             : createdCount
               ? `已批量新增 ${createdCount} 条，结果进入待审核。`
               : `已沿用 ${reusedCount} 个旧 key，结果进入待审核。`;
-        await translateProjectEntries(
-          projectForAi,
-          entriesForAi,
-          "en",
-          projectForAi.languages.filter((language) => language.code !== "en").map((language) => language.code),
-          request.tagNames,
-          {
-            busyMessage: "正在批量 AI 补全...",
-            successMessage,
-            emptyTargetsMessage: "没有可补全语言。"
+        if (request.generatedTranslations && request.generatedTargetLanguages && request.sourceItemKeys) {
+          const generatedForEntries: Record<string, Record<string, string>> = {};
+          createdEntryIds.forEach((entryId, position) => {
+            const entry = projectForAi.entries.find((item) => item.id === entryId);
+            const sourceIndex = createdSourceIndexes[position];
+            const itemKey = request.sourceItemKeys?.[sourceIndex];
+            const generatedForItem = itemKey ? request.generatedTranslations?.[itemKey] : undefined;
+            if (!entry || !generatedForItem) return;
+            generatedForEntries[entry.key] = {
+              ...generatedForItem,
+              [request.sourceLanguage]: request.sourceValues[sourceIndex]
+            };
+          });
+          duplicateItems
+            .filter((item) => item.decision === "reuse" && typeof item.sourceValueIndex === "number")
+            .forEach((item) => {
+              const entry = projectForAi.entries.find((candidate) => candidate.id === item.existingEntryId);
+              const sourceIndex = item.sourceValueIndex as number;
+              const itemKey = request.sourceItemKeys?.[sourceIndex];
+              const generatedForItem = itemKey ? request.generatedTranslations?.[itemKey] : undefined;
+              if (!entry || !generatedForItem) return;
+              generatedForEntries[entry.key] = {
+                ...generatedForItem,
+                [request.sourceLanguage]: request.sourceValues[sourceIndex]
+              };
+            });
+
+          if (Object.keys(generatedForEntries).length) {
+            await mergeProjectTranslations(
+              projectForAi,
+              generatedForEntries,
+              mergeLanguageCodes(request.generatedTargetLanguages, [request.sourceLanguage]),
+              request.tagNames
+            );
+            setAiMessage(successMessage);
           }
-        );
+        } else {
+          await translateProjectEntries(
+            projectForAi,
+            entriesForAi,
+            request.sourceLanguage,
+            projectForAi.languages
+              .filter((language) => language.code.toLowerCase() !== request.sourceLanguage.toLowerCase())
+              .map((language) => language.code),
+            request.tagNames,
+            {
+              busyMessage: "正在批量 AI 补全...",
+              successMessage,
+              emptyTargetsMessage: "没有可补全语言。"
+            }
+          );
+        }
       }
     } catch {
       setSaveState("error");
@@ -1377,12 +1563,20 @@ export function TranslationWorkspace() {
     const sourceValues = batchSourceText.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
     if (!sourceValues.length || !selectedTagNames.length) return;
 
-    const request = {
+    const draftRequest = {
       sourceValues,
+      sourceLanguage: batchSourceLanguage,
       keyGenerationMode: keyMode,
       tagNames: [...selectedTagNames]
     };
-    const duplicateItems = buildDuplicateEnglishCandidates(sourceValues);
+    const request = await prepareBatchEntriesWithEnglishKeys(draftRequest);
+    if (!request) return;
+
+    const englishValues =
+      request.sourceLanguage.toLowerCase() === "en"
+        ? request.sourceValues
+        : request.sourceItemKeys?.map((itemKey) => request.generatedTranslations?.[itemKey]?.en ?? "") ?? [];
+    const duplicateItems = buildDuplicateEnglishCandidates(englishValues);
     if (duplicateItems.length) {
       setDuplicateEnglishAction({ kind: "batch", request, items: duplicateItems });
       return;
@@ -2102,14 +2296,17 @@ export function TranslationWorkspace() {
       />
       <BatchAddTranslationDialog
         open={batchDialogOpen}
+        languages={activeProject.languages}
         tagOptions={tagOptions}
         tagColors={tagColors}
         selectedTagNames={selectedTagNames}
+        sourceLanguage={batchSourceLanguage}
         keyMode={keyMode}
         batchText={batchSourceText}
         aiBusy={aiBusy}
         onClose={() => setBatchDialogOpen(false)}
         onTagNamesChange={setSelectedTagNames}
+        onSourceLanguageChange={setBatchSourceLanguage}
         onKeyModeChange={setKeyMode}
         onBatchTextChange={setBatchSourceText}
         onAddWithAi={() => void batchAddEntries()}
