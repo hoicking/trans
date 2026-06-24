@@ -1788,9 +1788,9 @@ export function TranslationWorkspace() {
   }
 
   return (
-    <main className="min-h-screen bg-[#fbfbfa] text-zinc-950">
-      <div className="flex min-h-screen">
-        <aside className="hidden w-[292px] shrink-0 border-r bg-white/90 px-4 py-5 lg:block">
+    <main className="h-screen overflow-hidden bg-[#fbfbfa] text-zinc-950">
+      <div className="flex h-full min-h-0">
+        <aside className="hidden h-full w-[292px] shrink-0 overflow-y-auto border-r bg-white/90 px-4 py-5 lg:block">
           <div className="mb-8 flex items-center gap-3">
             <div className="flex h-9 w-9 items-center justify-center rounded-md bg-zinc-950 text-white">
               <Languages className="h-4 w-4" />
@@ -1843,8 +1843,8 @@ export function TranslationWorkspace() {
           </div>
         </aside>
 
-        <section className="min-w-0 flex-1">
-          <header className="sticky top-0 z-10 border-b bg-[#fbfbfa]/90 px-5 py-4 backdrop-blur">
+        <section className="flex min-h-0 min-w-0 flex-1 flex-col">
+          <header className="z-10 shrink-0 border-b bg-[#fbfbfa]/90 px-5 py-4 backdrop-blur">
             <div className="flex flex-wrap items-center justify-between gap-4">
               <div>
                 <div className="flex items-center gap-2 text-xs text-zinc-500">
@@ -1914,7 +1914,7 @@ export function TranslationWorkspace() {
             </nav>
           </header>
 
-          <div className="p-5">
+          <div className="min-h-0 flex-1 overflow-y-auto p-5">
             {activeTab === "dashboard" && (
               <DashboardPanel project={activeProject} stats={stats} setActiveTab={setActiveTab} />
             )}
