@@ -82,19 +82,24 @@ export function ImportTab({
           <h2 className="text-lg font-semibold">导入 JSON / Excel</h2>
           <p className="mt-1 text-sm text-zinc-500">导入时只处理 key 与译文，不覆盖系统内状态和操作时间。</p>
         </div>
-        <label className="inline-flex h-9 cursor-pointer items-center gap-2 rounded-md bg-zinc-950 px-3 text-sm font-medium text-white">
-          <Upload className="h-4 w-4" />
-          选择文件
-          <input
-            type="file"
-            accept=".json,.xlsx,.xls"
-            className="hidden"
-            onChange={(event) => {
-              const file = event.target.files?.[0];
-              if (file) onParseFile(file);
-            }}
-          />
-        </label>
+        <div className="flex flex-wrap gap-2">
+          <label className="inline-flex h-9 cursor-pointer items-center gap-2 rounded-md bg-zinc-950 px-3 text-sm font-medium text-white">
+            <Upload className="h-4 w-4" />
+            选择文件
+            <input
+              type="file"
+              accept=".json,.xlsx,.xls"
+              className="hidden"
+              onChange={(event) => {
+                const file = event.target.files?.[0];
+                if (file) onParseFile(file);
+              }}
+            />
+          </label>
+          <Button onClick={onApplyImport} disabled={!importRows.length || !selectedTagNames.length}>
+            应用导入
+          </Button>
+        </div>
       </div>
 
       <div className="rounded-md border bg-zinc-50 p-3">
@@ -228,9 +233,6 @@ export function ImportTab({
         </table>
       </div>
       <PaginationBar page={importPage} pageCount={importPageCount} total={importRows.length} pageSize={importPageSize} onPageChange={onImportPageChange} />
-      <Button onClick={onApplyImport} disabled={!importRows.length || !selectedTagNames.length}>
-        应用导入
-      </Button>
     </section>
   );
 }
