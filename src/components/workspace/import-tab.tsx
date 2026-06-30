@@ -1,6 +1,6 @@
 "use client";
 
-import { Upload, WandSparkles } from "lucide-react";
+import { CheckCheck, CopyPlus, ReplaceAll, Upload, WandSparkles } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -34,6 +34,7 @@ export function ImportTab({
   onAiTargetLanguagesChange,
   onTranslateImportPreview,
   onSetConflictAction,
+  onSetAllConflictActions,
   onImportPageChange,
   onConflictPageChange,
   onApplyImport
@@ -61,10 +62,19 @@ export function ImportTab({
   onAiTargetLanguagesChange: (value: string) => void;
   onTranslateImportPreview: () => void;
   onSetConflictAction: (conflictId: string, action: ConflictAction) => void;
+  onSetAllConflictActions: (action: ConflictAction) => void;
   onImportPageChange: (page: number) => void;
   onConflictPageChange: (page: number) => void;
   onApplyImport: () => void;
 }) {
+  const conflictActionSummary = conflicts.reduce<Record<ConflictAction, number>>(
+    (summary, conflict) => {
+      summary[conflict.action] += 1;
+      return summary;
+    },
+    { keep: 0, overwrite: 0, append: 0 }
+  );
+
   return (
     <section className="space-y-4 rounded-lg border bg-white p-5 shadow-soft">
       <div className="flex flex-wrap items-center justify-between gap-4">
@@ -122,7 +132,43 @@ export function ImportTab({
 
       {conflicts.length > 0 && (
         <div className="rounded-md border border-red-200 bg-red-50 p-3">
-          <div className="mb-3 text-sm font-medium text-red-800">发现重复 key，请选择处理方式</div>
+          <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
+            <div>
+              <div className="text-sm font-medium text-red-800">发现译文不一致的重复 key，请选择处理方式</div>
+              <div className="mt-1 text-xs text-red-700">
+                当前：沿用 {conflictActionSummary.keep} · 覆盖 {conflictActionSummary.overwrite} · 追加 {conflictActionSummary.append}
+              </div>
+            </div>
+            <div className="flex flex-wrap gap-2">
+              <Button
+                type="button"
+                size="sm"
+                variant={conflictActionSummary.keep === conflicts.length ? "default" : "outline"}
+                onClick={() => onSetAllConflictActions("keep")}
+              >
+                <CheckCheck className="h-4 w-4" />
+                全部沿用
+              </Button>
+              <Button
+                type="button"
+                size="sm"
+                variant={conflictActionSummary.overwrite === conflicts.length ? "default" : "outline"}
+                onClick={() => onSetAllConflictActions("overwrite")}
+              >
+                <ReplaceAll className="h-4 w-4" />
+                全部覆盖
+              </Button>
+              <Button
+                type="button"
+                size="sm"
+                variant={conflictActionSummary.append === conflicts.length ? "default" : "outline"}
+                onClick={() => onSetAllConflictActions("append")}
+              >
+                <CopyPlus className="h-4 w-4" />
+                全部追加
+              </Button>
+            </div>
+          </div>
           <div className="space-y-2">
             {paginatedConflicts.map((conflict) => (
               <div key={conflict.id} className="grid gap-2 rounded-md border bg-white p-3 md:grid-cols-[1fr_220px]">

@@ -102,9 +102,27 @@ export async function POST(request: Request, { params }: { params: Promise<{ pro
 
       const existingEntries = await tx.translationEntry.findMany({
         where: { projectId },
-        select: { id: true, key: true }
+        select: {
+          id: true,
+          key: true,
+          values: {
+            select: {
+              languageCode: true,
+              value: true
+            }
+          }
+        }
       });
-      const entryByKey = new Map(existingEntries.map((entry) => [entry.key, entry]));
+      const entryByKey = new Map(
+        existingEntries.map((entry) => [
+          entry.key,
+          {
+            id: entry.id,
+            key: entry.key,
+            values: new Map(entry.values.map((value) => [value.languageCode, value.value]))
+          }
+        ])
+      );
       const keySet = new Set(existingEntries.map((entry) => entry.key));
 
       for (const row of usableRows) {
@@ -113,9 +131,23 @@ export async function POST(request: Request, { params }: { params: Promise<{ pro
         const requestedKey =
           row.key?.trim() || (keyGenerationMode === "semantic" ? semanticKey(sourceText) : slugKey(sourceText));
         const existing = entryByKey.get(requestedKey);
-        const action = existing ? conflictActions[requestedKey] ?? "keep" : undefined;
+        const action = existing ? conflictActions[requestedKey] ?? "overwrite" : undefined;
 
         if (existing && action === "keep") {
+          skipped += 1;
+          continue;
+        }
+
+        const incomingValues = Object.entries(row.values).map(([languageCode, value]) => [
+          languageCode.toLowerCase(),
+          value.trim()
+        ] as const);
+        const valuesToWrite =
+          existing && action === "overwrite"
+            ? incomingValues.filter(([languageCode, value]) => existing.values.get(languageCode) !== value)
+            : incomingValues;
+
+        if (existing && action === "overwrite" && valuesToWrite.length === 0) {
           skipped += 1;
           continue;
         }
@@ -144,18 +176,17 @@ export async function POST(request: Request, { params }: { params: Promise<{ pro
                 }
               });
 
-        for (const [languageCode, value] of Object.entries(row.values)) {
-          const cleanValue = value.trim();
+        for (const [languageCode, cleanValue] of valuesToWrite) {
           await tx.translationValue.upsert({
             where: {
               entryId_languageCode: {
                 entryId: entry.id,
-                languageCode: languageCode.toLowerCase()
+                languageCode
               }
             },
             create: {
               entryId: entry.id,
-              languageCode: languageCode.toLowerCase(),
+              languageCode,
               value: cleanValue,
               isTranslated: Boolean(cleanValue),
               translatedAt: cleanValue ? now : null,
@@ -185,9 +216,21 @@ export async function POST(request: Request, { params }: { params: Promise<{ pro
           ),
           skipDuplicates: true
         });
-        entryByKey.set(resolvedKey, { id: entry.id, key: resolvedKey });
+        const updatedValues = new Map(existing?.values ?? []);
+        for (const [languageCode, value] of valuesToWrite) {
+          updatedValues.set(languageCode, value);
+        }
+        entryByKey.set(resolvedKey, {
+          id: entry.id,
+          key: resolvedKey,
+          values: updatedValues
+        });
         if (resolvedKey === requestedKey) {
-          entryByKey.set(requestedKey, { id: entry.id, key: requestedKey });
+          entryByKey.set(requestedKey, {
+            id: entry.id,
+            key: requestedKey,
+            values: updatedValues
+          });
         }
         imported += 1;
       }

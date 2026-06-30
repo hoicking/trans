@@ -287,6 +287,13 @@ function isLanguageImportColumn(header: string) {
   return /^[a-z]{2,3}(-[a-z0-9]{2,8})?$/i.test(normalized);
 }
 
+function languageCodeFromJsonFilename(filename: string) {
+  const basename = filename.split(/[\\/]/).pop() ?? "";
+  const withoutExtension = basename.replace(/\.json$/i, "");
+  const candidate = withoutExtension.split(".").pop()?.trim().toLowerCase() ?? "";
+  return /^[a-z]{2,3}(-[a-z0-9]{2,8})?$/i.test(candidate) ? candidate : null;
+}
+
 export function TranslationWorkspace() {
   const { projects, setProjects, activeProjectId, setActiveProjectId, isLoading } = useProjects();
   const [saveState, setSaveState] = React.useState<"idle" | "saving" | "saved" | "error">("idle");
@@ -721,14 +728,24 @@ export function TranslationWorkspace() {
 
   const buildImportConflicts = React.useCallback(
     (rows: ImportRow[]) => {
-      const existingKeys = new Set(activeProject.entries.map((entry) => entry.key));
+      const existingEntryByKey = new Map(activeProject.entries.map((entry) => [entry.key, entry]));
       return rows
-        .filter((row): row is ImportRow & { key: string } => Boolean(row.key && existingKeys.has(row.key)))
+        .filter((row): row is ImportRow & { key: string } => {
+          if (!row.key) return false;
+          const existingEntry = existingEntryByKey.get(row.key);
+          if (!existingEntry) return false;
+          return Object.entries(row.values).some(([languageCode, value]) => {
+            const normalizedLanguageCode = languageCode.toLowerCase();
+            const incomingValue = value.trim();
+            const existingValue = existingEntry.translations[normalizedLanguageCode]?.value ?? "";
+            return incomingValue !== existingValue;
+          });
+        })
         .map((row) => ({
           id: makeId("conflict"),
           key: row.key,
           incoming: row,
-          action: "keep" as ConflictAction
+          action: "overwrite" as ConflictAction
         }));
     },
     [activeProject.entries]
@@ -1646,7 +1663,7 @@ export function TranslationWorkspace() {
     const extension = file.name.split(".").pop()?.toLowerCase();
     if (extension === "json") {
       const parsed = JSON.parse(await file.text()) as Record<string, string>;
-      const importLanguage = activeLanguage === "all" ? "en" : activeLanguage;
+      const importLanguage = languageCodeFromJsonFilename(file.name) ?? (activeLanguage === "all" ? "en" : activeLanguage);
       prepareImport(Object.entries(parsed).map(([key, value]) => ({ key, sourceLanguage: importLanguage, values: { [importLanguage]: String(value) } })));
       return;
     }
@@ -1803,6 +1820,10 @@ export function TranslationWorkspace() {
 
   function setConflictAction(conflictId: string, action: ConflictAction) {
     setConflicts((current) => current.map((conflict) => (conflict.id === conflictId ? { ...conflict, action } : conflict)));
+  }
+
+  function setAllConflictActions(action: ConflictAction) {
+    setConflicts((current) => current.map((conflict) => ({ ...conflict, action })));
   }
 
   async function applyImport() {
@@ -2240,6 +2261,7 @@ export function TranslationWorkspace() {
                 onAiTargetLanguagesChange={setAiTargetLanguages}
                 onTranslateImportPreview={() => void translateImportPreview()}
                 onSetConflictAction={setConflictAction}
+                onSetAllConflictActions={setAllConflictActions}
                 onImportPageChange={setImportPage}
                 onConflictPageChange={setConflictPage}
                 onApplyImport={() => void applyImport()}
