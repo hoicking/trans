@@ -84,7 +84,9 @@ export function TranslationTab({
   tagColors,
   children,
   onSearchChange,
+  onSearchClear,
   onSearchSubmit,
+  onResetFilters,
   onActiveLanguageChange,
   onStatusFilterChange,
   onTagFiltersChange,
@@ -100,7 +102,9 @@ export function TranslationTab({
   tagColors: Record<string, string>;
   children: React.ReactNode;
   onSearchChange: (value: string) => void;
+  onSearchClear: () => void;
   onSearchSubmit: () => void;
+  onResetFilters: () => void;
   onActiveLanguageChange: (value: string) => void;
   onStatusFilterChange: (value: StatusFilter) => void;
   onTagFiltersChange: (value: string[]) => void;
@@ -112,55 +116,72 @@ export function TranslationTab({
   return (
     <div className="space-y-4">
       <section className="rounded-lg border bg-white p-4 shadow-soft">
-        <div className="grid gap-3 2xl:grid-cols-[minmax(320px,1fr)_auto_330px_minmax(220px,300px)_auto] 2xl:items-start">
-          <div className="relative min-w-0">
-            <Search className="pointer-events-none absolute left-3 top-2.5 h-4 w-4 text-zinc-400" />
-            <Input
-              value={search}
-              onChange={(event) => onSearchChange(event.target.value)}
-              onKeyDown={(event) => {
-                if (event.key === "Enter") onSearchSubmit();
-              }}
-              placeholder="搜索 key 或译文"
-              className="pl-9"
+        <div className="space-y-3">
+          <div className="grid gap-3 2xl:grid-cols-[minmax(320px,1fr)_330px_minmax(220px,300px)_auto] 2xl:items-start">
+            <div className="relative min-w-0">
+              <Search className="pointer-events-none absolute left-3 top-2.5 h-4 w-4 text-zinc-400" />
+              <Input
+                value={search}
+                onChange={(event) => onSearchChange(event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter") onSearchSubmit();
+                }}
+                placeholder="搜索 key 或译文"
+                className="pl-9 pr-9"
+              />
+              {search && (
+                <button
+                  type="button"
+                  className="absolute right-2 top-2 rounded p-0.5 text-zinc-400 hover:bg-zinc-100 hover:text-zinc-700"
+                  onClick={onSearchClear}
+                  aria-label="清空搜索"
+                >
+                  <X className="h-4 w-4" />
+                </button>
+              )}
+            </div>
+            <div className="grid h-9 grid-cols-2 overflow-hidden rounded-md border bg-white shadow-sm">
+              <Select
+                aria-label="语言"
+                className="rounded-none border-0 shadow-none focus-visible:ring-0"
+                value={activeLanguage}
+                onChange={(event) => onActiveLanguageChange(event.target.value)}
+              >
+                <option value="all">全部语言</option>
+                {languages.map((language) => (
+                  <option key={language.code} value={language.code}>
+                    {language.code} · {language.name}
+                  </option>
+                ))}
+              </Select>
+              <Select
+                aria-label="状态"
+                className="rounded-none border-0 border-l shadow-none focus-visible:ring-0"
+                value={statusFilter}
+                onChange={(event) => onStatusFilterChange(event.target.value as StatusFilter)}
+              >
+                <option value="all">全部状态</option>
+                <option value="missing">{statusScopeLabel}未翻译</option>
+                <option value="translated">{statusScopeLabel}已翻译</option>
+                <option value="unreviewed">{statusScopeLabel}待审核</option>
+                <option value="reviewed">{statusScopeLabel}已审核</option>
+              </Select>
+            </div>
+            <CompactTagFilter
+              tagOptions={tagOptions}
+              tagColors={tagColors}
+              selectedTagNames={tagFilters}
+              onChange={onTagFiltersChange}
             />
+            <div className="flex flex-wrap justify-end gap-2">
+              <Button variant="outline" onClick={onSearchSubmit}>
+                查询
+              </Button>
+              <Button variant="outline" onClick={onResetFilters}>
+                重置筛选
+              </Button>
+            </div>
           </div>
-          <Button variant="outline" onClick={onSearchSubmit}>
-            查询
-          </Button>
-          <div className="grid h-9 grid-cols-2 overflow-hidden rounded-md border bg-white shadow-sm">
-            <Select
-              aria-label="语言"
-              className="rounded-none border-0 shadow-none focus-visible:ring-0"
-              value={activeLanguage}
-              onChange={(event) => onActiveLanguageChange(event.target.value)}
-            >
-              <option value="all">全部语言</option>
-              {languages.map((language) => (
-                <option key={language.code} value={language.code}>
-                  {language.code} · {language.name}
-                </option>
-              ))}
-            </Select>
-            <Select
-              aria-label="状态"
-              className="rounded-none border-0 border-l shadow-none focus-visible:ring-0"
-              value={statusFilter}
-              onChange={(event) => onStatusFilterChange(event.target.value as StatusFilter)}
-            >
-              <option value="all">全部状态</option>
-              <option value="missing">{statusScopeLabel}未翻译</option>
-              <option value="translated">{statusScopeLabel}已翻译</option>
-              <option value="unreviewed">{statusScopeLabel}待审核</option>
-              <option value="reviewed">{statusScopeLabel}已审核</option>
-            </Select>
-          </div>
-          <CompactTagFilter
-            tagOptions={tagOptions}
-            tagColors={tagColors}
-            selectedTagNames={tagFilters}
-            onChange={onTagFiltersChange}
-          />
           <div className="flex flex-wrap justify-end gap-2">
             <Button onClick={onOpenAddDialog}>
               <Plus className="h-4 w-4" />

@@ -1061,6 +1061,23 @@ export function TranslationWorkspace() {
     setEntryPage(1);
   }, [activeProject.entries, entryMatchesSearch, search]);
 
+  const clearEntrySearch = React.useCallback(() => {
+    setSearch("");
+    setAppliedSearch("");
+    setSearchResultEntryIds(null);
+    setEntryPage(1);
+  }, []);
+
+  const resetEntryFilters = React.useCallback(() => {
+    setSearch("");
+    setAppliedSearch("");
+    setSearchResultEntryIds(null);
+    setActiveLanguage("all");
+    setStatusFilter("all");
+    setEntryTagFilters([]);
+    setEntryPage(1);
+  }, []);
+
   const filteredEntries = React.useMemo(() => {
     const searchResultSet = searchResultEntryIds ? new Set(searchResultEntryIds) : null;
     return activeProject.entries.filter((entry) => {
@@ -2144,7 +2161,9 @@ export function TranslationWorkspace() {
                 tagOptions={tagOptions}
                 tagColors={tagColors}
                 onSearchChange={setSearch}
+                onSearchClear={clearEntrySearch}
                 onSearchSubmit={runEntrySearch}
+                onResetFilters={resetEntryFilters}
                 onActiveLanguageChange={setActiveLanguage}
                 onStatusFilterChange={setStatusFilter}
                 onTagFiltersChange={setEntryTagFilters}
